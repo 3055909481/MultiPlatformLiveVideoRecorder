@@ -13,7 +13,7 @@ class BiliBiliVideoDownloadAdapter extends VideoDownloadAdapter {
     const preferenceQualityCode = preferenceQuality.code
     return new Promise(async (resolve, reject) => {
       try {
-        const settings = await getSettings()
+        const settings = (await getSettings()) || {}
         // const bvid = new RegExp('https?://(?:www|m)\\.bilibili.com/([^/?]+)').exec(url)[1]
         // 获取页面默认视频信息,支持的清晰度信息
         const videoPageHtml = (await httpUtil.get(url, this.httpHeaders)).data

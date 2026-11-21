@@ -86,7 +86,9 @@ const downloadManager = new Vue({
           return
         }
       }
-      const downloadInfo = await (new Adapter().getDownloadInfo(downloadRecord.url, downloadRecord.preferenceQuality))
+      // 旧任务里持久化的清晰度可能在平台配置升级后失效
+      const preferenceQuality = VideoDownloadAdapter.migratePreference(Adapter, downloadRecord.preferenceQuality)
+      const downloadInfo = await (new Adapter().getDownloadInfo(downloadRecord.url, preferenceQuality))
       if (!downloadInfo) {
         await this.updateFailedDownloadStatus(downloadRecordId, new Error(`获取下载地址失败`))
         return

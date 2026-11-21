@@ -3,7 +3,7 @@ import HttpUtil from '../utils/http-util.js'
 // 斗鱼加签算法内部需要
 import CryptoJS from 'crypto-js'
 import uuid4 from 'uuid/v4'
-import {VM} from 'vm2'
+import {runIsolated} from '../utils/safe-vm'
 import qs from 'query-string'
 
 // 因为斗鱼的sign混淆中会去验证一些window/document的函数是否是native的 (以此判断是否是浏览器环境), 所以这里直接proxy返回
@@ -27,15 +27,13 @@ function getSignFn (rid) {
       let code = json.data && json.data['room' + rid]
       if (!code) reject(new Error('Unexpected result with homeH5Enc, ' + JSON.stringify(json)))
 
-      // 使用VM2沙箱环境运行加签函数
-      const vm = new VM({
-        sandbox: {
-          CryptoJS: CryptoJS,
-          window: disguisedNative,
-          document: disguisedNative
-        }
+      // 使用受限的 Node vm 沙箱运行加签函数（禁用动态代码生成 + 超时保护）
+      const sign = runIsolated(code + ';ub98484234', {
+        CryptoJS: CryptoJS,
+        window: disguisedNative,
+        document: disguisedNative
       })
-      resolve(vm.run(code + ';ub98484234'))
+      resolve(sign)
     } catch (e) {
       reject(e)
     }

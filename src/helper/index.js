@@ -48,3 +48,10 @@ export function getProductName () {
 export function getGatewayExchangeServerPort () {
   return process.env.NODE_ENV === 'development' ? 31091 : 32999
 }
+
+/**
+ * 本地代理令牌，由主进程启动时写入环境变量，renderer 进程继承
+ */
+export function getGatewayToken () {
+  return process.env.MPLVR_GATEWAY_TOKEN || ''
+}

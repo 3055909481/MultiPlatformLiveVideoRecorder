@@ -102,8 +102,10 @@ const recordManager = new Vue({
       }
     },
     async fixDatabase () {
-      // 先重置所有任务状态再循环检查
-      await this.$dbs.record._update_({}, {$set: {status: this.recordStatus.waitToCheck}}, {multi: true})
+      // 只重置上次退出时仍处于「检查中/录制中」的残留状态，不改动正常等待中的任务
+      await this.$dbs.record._update_({
+        status: {$in: [this.recordStatus.checking, this.recordStatus.recording]}
+      }, {$set: {status: this.recordStatus.waitToCheck}}, {multi: true})
       await this.$dbs.recordHistory._update_({status: this.recordHistoryStatus.recording}, {$set: {status: this.recordHistoryStatus.unexpectedExit, stopRecordTime: new Date()}}, {multi: true})
     },
     async fixUnexpectedRecordHistory () {

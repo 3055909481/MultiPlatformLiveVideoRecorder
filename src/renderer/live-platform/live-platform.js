@@ -1,3 +1,5 @@
+const preferenceHelper = require('../../helper/preference')
+
 class LivePlatform {
   constructor () {
     this.phoneUserAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1'
@@ -89,6 +91,16 @@ LivePlatform.getQualityByCode = (platform, qualityCode) => {
     }
   }
   return null
+}
+
+/**
+ * 兼容旧任务中失效的清晰度/线路配置
+ */
+LivePlatform.migratePreference = (platform, saved, type) => {
+  const isChannel = type === 'channel'
+  const options = platform && platform.defaultConfig ? platform.defaultConfig[isChannel ? 'channels' : 'qualities'] : []
+  const defaultCode = platform && platform.defaultConfig ? platform.defaultConfig[isChannel ? 'defaultChannelCode' : 'defaultQualityCode'] : undefined
+  return preferenceHelper.migratePreference(options, saved, defaultCode)
 }
 
 LivePlatform.getPreference = (findKey, orderKey, findArray, filterArray, value) => {

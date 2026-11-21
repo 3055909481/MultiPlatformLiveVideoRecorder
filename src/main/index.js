@@ -3,6 +3,7 @@
 import {app, BrowserWindow, Menu, Tray} from 'electron'
 import path from 'path'
 import fs from 'fs'
+import crypto from 'crypto'
 import express from 'express'
 import bodyParser from 'body-parser'
 import axios from 'axios'
@@ -10,6 +11,7 @@ import axios from 'axios'
 import IpcMainUtil from '../helper/ipcMainUtil'
 import IpcChannel from '../helper/IpcChannel'
 import {getAppName, getGatewayExchangeServerPort} from '../helper'
+const safeUrl = require('../helper/safe-url')
 /**
  * Set `__static` path to static files in production
  * https://simulatedgreg.gitbooks.io/electron-vue/content/en/using-static-assets.html
@@ -30,18 +32,21 @@ let tray = null
 const winURL = process.env.NODE_ENV === 'development'
   ? `http://localhost:9080`
   : `file://${__dirname}/index.html`
-// 单例模式
-const isSecondInstance = app.makeSingleInstance((commandLine, workingDirectory) => {
-  // Someone tried to run a second instance, we should focus our window.
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.focus()
-  }
-})
-// 第二个实例停止
-if (isSecondInstance) {
+// 单例模式（Electron >= 4 的 API）
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
   app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+  })
 }
+
+// 本地代理的启动令牌，renderer 进程通过环境变量继承
+process.env.MPLVR_GATEWAY_TOKEN = crypto.randomBytes(24).toString('hex')
 
 function createWindow () {
   /**
@@ -53,11 +58,13 @@ function createWindow () {
     width: 1680,
     show: false,
     icon: path.join(__dirname, 'static/icon32.ico'),
-    // 关闭web安全（允许跨域）
     webPreferences: {
-      webSecurity: false,
+      // 恢复同源策略；所有跨域请求改走带令牌的主进程代理
+      webSecurity: true,
+      // 本应用依赖 remote/fs/fluent-ffmpeg，renderer 需要 Node 能力
       nodeIntegration: true,
-      contextIsolation: false
+      contextIsolation: false,
+      enableRemoteModule: true
     }
   })
   mainWindow.appTray = tray
@@ -97,7 +104,15 @@ function createWindow () {
         parent: mainWindow,
         height: 500,
         width: 800,
-        show: false
+        show: false,
+        // 该窗口会加载第三方页面：禁用 Node 与远程模块
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+          webSecurity: true,
+          enableRemoteModule: false
+        }
       })
       browserWindow.loadURL(url)
       browserWindow.webContents.on('dom-ready', () => {
@@ -206,32 +221,95 @@ function getTrayImageFileName () {
   }
 }
 
-function startGatewayExchangeServer () {
-  // 内嵌服务支持修改UA等
-  const expressServer = express()
-  // 自定义跨域中间件
-  const allowCors = function (req, res, next) {
-    res.header('Access-Control-Allow-Origin', '*')
-    res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    res.header('Access-Control-Allow-Headers', '*')
-    res.header('Access-Control-Allow-Credentials', 'true')
-    next()
+/**
+ * 手动跟随重定向，确保每一跳都经过目标地址校验，避免公网地址跳转到内网
+ */
+async function requestSafe (config, redirectsLeft = 3) {
+  const res = await axios.request({...config, maxRedirects: 0, validateStatus: () => true})
+  const status = res.status
+  const location = res.headers && res.headers.location
+  if (location && [301, 302, 303, 307, 308].includes(status)) {
+    if (redirectsLeft <= 0) throw new Error('Too many redirects')
+    const nextUrl = new URL(location, config.url).toString()
+    if (!safeUrl.isSafeTargetUrl(nextUrl)) throw new Error('Redirect target not allowed')
+    const switchToGet = status === 303 && config.method !== 'get'
+    return requestSafe({
+      ...config,
+      url: nextUrl,
+      method: switchToGet ? 'get' : config.method,
+      data: switchToGet ? undefined : config.data
+    }, redirectsLeft - 1)
   }
-  // 使用跨域中间件
-  expressServer.use(allowCors)
-  // 解析body
-  expressServer.use(bodyParser.json())
-  // 转发请求
-  expressServer.post('/gateway/exchange', function (req, resp) {
-    axios.request(req.body.config).then(res => {
-      resp.status(200)
-      resp.send(res.data)
-    }).catch(e => {
-      resp.status(500)
-      resp.send(e.message)
-    })
+  return res
+}
+
+function startGatewayExchangeServer () {
+  // 内嵌服务支持修改 UA / 携带 Cookie
+  const expressServer = express()
+  expressServer.use((req, res, next) => {
+    // 只允许来自 file:// 页面（Origin: null）的请求
+    const origin = req.headers.origin
+    if (origin && origin !== 'null' && !origin.startsWith('file://')) {
+      res.status(403).send('Forbidden origin')
+      return
+    }
+    res.header('Access-Control-Allow-Origin', 'null')
+    res.header('Access-Control-Allow-Methods', 'GET,POST')
+    res.header('Access-Control-Allow-Headers', 'Content-Type,X-MPLVR-Token')
+    if (req.method === 'OPTIONS') {
+      res.status(204).end()
+      return
+    }
+    next()
   })
-  expressServer.listen(getGatewayExchangeServerPort(), 'localhost')
+  expressServer.use(bodyParser.json({limit: '2mb'}))
+  expressServer.post('/gateway/exchange', async (req, res) => {
+    if (req.headers['x-mplvr-token'] !== process.env.MPLVR_GATEWAY_TOKEN) {
+      res.status(401).send('Unauthorized')
+      return
+    }
+    const config = req.body && req.body.config
+    if (!config || typeof config.url !== 'string') {
+      res.status(400).send('Invalid request')
+      return
+    }
+    const method = String(config.method || 'get').toLowerCase()
+    if (method !== 'get' && method !== 'post') {
+      res.status(400).send('Method not allowed')
+      return
+    }
+    if (!safeUrl.isSafeTargetUrl(config.url)) {
+      res.status(400).send('Target URL not allowed')
+      return
+    }
+    try {
+      const axiosRes = await requestSafe({
+        ...config,
+        method,
+        timeout: 20000,
+        validateStatus: () => true
+      })
+      const responseUrl = axiosRes.request && axiosRes.request.res && axiosRes.request.res.responseUrl
+      res.status(200).json({
+        status: axiosRes.status,
+        statusText: axiosRes.statusText,
+        headers: axiosRes.headers,
+        data: axiosRes.data,
+        responseURL: responseUrl || config.url
+      })
+    } catch (e) {
+      const errorResponse = e.response || {}
+      res.status(200).json({
+        status: errorResponse.status || 500,
+        statusText: e.message,
+        headers: errorResponse.headers || {},
+        data: errorResponse.data !== undefined ? errorResponse.data : e.message,
+        responseURL: config.url,
+        error: true
+      })
+    }
+  })
+  expressServer.listen(getGatewayExchangeServerPort(), '127.0.0.1')
 }
 
 function init () {

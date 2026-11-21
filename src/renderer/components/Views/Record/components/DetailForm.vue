@@ -103,7 +103,7 @@
         <el-option label="30分钟" :value="1800"></el-option>
         <el-option label="1小时" :value="3600"></el-option>
         <el-option label="1小时30分钟" :value="4800"></el-option>
-        <el-option label="2小时" :value="6400"></el-option>
+        <el-option label="2小时" :value="7200"></el-option>
       </el-select>
     </el-form-item>
     <el-form-item
@@ -293,8 +293,9 @@ export default {
               this.user = record.user
               this.record.userName = record.user.name
               this.record.idOrUrl = record.user.idShow
-              this.record.channel = platform.getChannelByCode(platform, record.settings.preferenceChannel.code)
-              this.record.quality = platform.getQualityByCode(platform, record.settings.preferenceQuality.code)
+              // 兼容旧任务：失效的清晰度/线路自动回退到当前默认配置
+              this.record.channel = platform.migratePreference(platform, record.settings.preferenceChannel, 'channel')
+              this.record.quality = platform.migratePreference(platform, record.settings.preferenceQuality, 'quality')
               this.record.autoCheck = record.settings.autoCheck ? record.settings.autoCheck : false
               this.record.checkWindow = (!record.settings.checkWindow || Number(record.settings.checkWindow)) < 10 ? 10 : record.settings.checkWindow
               this.record.outPutDir = record.settings.outPutDir
@@ -322,6 +323,10 @@ export default {
       }
       // 获取用户信息
       let Platform = this.record.platform
+      if (/^https?:\/\//i.test(this.record.idOrUrl) && Platform.isSupportedUrl && !Platform.isSupportedUrl(this.record.idOrUrl)) {
+        this.$message.warning('输入的链接与所选直播平台不匹配，请检查平台选择')
+        return
+      }
       new Platform().getUserInfo(this.record.idOrUrl).then(res => {
         console.log(res)
         this.record.idOrUrl = res.idShow
@@ -375,12 +380,17 @@ export default {
           }
         })
       } else {
-        this.$dbs.record.find({'user.name': this.user.name}, (e, docs) => {
+        // 按平台 + 主播 ID 去重，避免不同平台同名主播被误判为重复
+        const duplicateQuery = {
+          'platform.code': this.record.platform.platformInfo.code,
+          'user.id': this.user.id
+        }
+        this.$dbs.record.find(duplicateQuery, (e, docs) => {
           if (e) {
             console.log(e)
           }
           if (docs.length > 0) {
-            this.$message.error('名称重复')
+            this.$message.error('该主播的录制任务已存在')
           } else {
             this.$dbs.record.insert(record, (e, nDoc) => {
               if (nDoc) {

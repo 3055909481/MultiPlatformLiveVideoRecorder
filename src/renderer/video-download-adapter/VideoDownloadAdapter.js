@@ -1,3 +1,5 @@
+const preferenceHelper = require('../../helper/preference')
+
 class VideoDownloadAdapter {
   constructor () {
     this.phoneUserAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1'
@@ -26,6 +28,14 @@ VideoDownloadAdapter.supportVideoOutPutFormats = {
     '-bsf:v': 'h264_mp4toannexb'
   },
   'ts': {}
+}
+
+/**
+ * 兼容旧下载任务中失效的清晰度配置
+ */
+VideoDownloadAdapter.migratePreference = (adapter, saved) => {
+  const options = adapter && adapter.defaultConfig ? adapter.defaultConfig.qualities : []
+  return preferenceHelper.migratePreference(options, saved, null)
 }
 
 VideoDownloadAdapter.setFFmpegOutputOptions = (ffmpeg_, ffmpegOutputOption) => {

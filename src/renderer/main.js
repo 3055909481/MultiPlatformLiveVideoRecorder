@@ -1,6 +1,5 @@
 import Vue from 'vue'
 import axios from 'axios'
-import request from 'request'
 
 import ElementUI from 'element-ui'
 import 'element-ui/lib/theme-chalk/index.css'
@@ -19,7 +18,6 @@ if (!process.env.IS_WEB) Vue.use(require('vue-electron'))
 Vue.use(ElementUI)
 
 Vue.http = Vue.prototype.$http = axios
-Vue.prototype.$request = request
 // 数据库组件
 Vue.prototype.$dbs = dbs
 Vue.config.productionTip = false
