@@ -31,8 +31,6 @@ jobs:
 
       - name: Build installer
         run: npm run build
-        env:
-          CI: true
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

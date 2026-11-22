@@ -9,7 +9,7 @@
     "prebuild": "node scripts/copy-vendor.js",
     "predev": "node scripts/copy-vendor.js",
     "prepack": "node scripts/copy-vendor.js",
-    "build": "cross-env NODE_OPTIONS=--openssl-legacy-provider node .electron-vue/build.js && electron-builder",
+    "build": "cross-env NODE_OPTIONS=--openssl-legacy-provider node .electron-vue/build.js && electron-builder --publish never",
     "build:dir": "cross-env NODE_OPTIONS=--openssl-legacy-provider node .electron-vue/build.js && electron-builder --dir",
     "build:clean": "cross-env BUILD_TARGET=clean NODE_OPTIONS=--openssl-legacy-provider node .electron-vue/build.js",
     "build:web": "cross-env BUILD_TARGET=web NODE_OPTIONS=--openssl-legacy-provider node .electron-vue/build.js",
