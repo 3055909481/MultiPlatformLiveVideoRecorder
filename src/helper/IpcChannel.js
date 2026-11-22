@@ -10,7 +10,9 @@ const IpcChannel = {
   downloadUpdate: 'downloadUpdate',
   downloadUpdateProgress: 'downloadUpdateProgress',
   downloadUpdateReply: 'downloadUpdateReply',
-  installUpdate: 'installUpdate'
+  installUpdate: 'installUpdate',
+  browserFetch: 'browserFetch',
+  browserFetchReply: 'browserFetchReply'
 }
 
 export default IpcChannel

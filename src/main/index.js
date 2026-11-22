@@ -292,6 +292,46 @@ function createWindow () {
       IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.getDouyinRoomDataReply, url, false)
     }
   })
+
+  // 通用浏览器抓取：用隐藏窗口加载页面，在真实 Chromium 上下文里 fetch API，
+  // 用浏览器自身的 TLS 指纹与 Cookie 绕过 Cloudflare 对 Node.js 的拦截。
+  IpcMainUtil.on(IpcChannel.browserFetch, async (event, token, pageUrl, apiUrl) => {
+    let fetchWindow = null
+    try {
+      fetchWindow = new BrowserWindow({
+        parent: mainWindow,
+        show: false,
+        width: 900,
+        height: 600,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+          webSecurity: true,
+          enableRemoteModule: false
+        }
+      })
+      await fetchWindow.loadURL(pageUrl)
+      // 页面加载完成后（含 Cloudflare 挑战），在页面上下文里请求 API
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      const script = `(async () => {
+        const resp = await fetch(${JSON.stringify(apiUrl)}, {
+          headers: {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json'},
+          credentials: 'include'
+        });
+        const text = await resp.text();
+        return JSON.stringify({status: resp.status, body: text});
+      })()`
+      const result = await fetchWindow.webContents.executeJavaScript(script, true)
+      IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.browserFetchReply, token, true, result)
+    } catch (e) {
+      IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.browserFetchReply, token, false, e.message)
+    } finally {
+      if (fetchWindow && !fetchWindow.isDestroyed()) {
+        fetchWindow.destroy()
+      }
+    }
+  })
 }
 
 function createTray () {

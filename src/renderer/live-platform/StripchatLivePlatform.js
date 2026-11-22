@@ -1,5 +1,8 @@
 import LivePlatform from './live-platform.js'
-import HttpUtil from '../utils/http-util.js'
+import IpcChannel from '../../helper/IpcChannel'
+import ipcRendererUtil from '../../helper/ipcRendererUtil'
+
+let fetchTokenSeq = 0
 
 function parseInput (idOrUrl) {
   if (!/^https?:\/\//i.test(idOrUrl)) {
@@ -25,58 +28,58 @@ class StripchatLivePlatform extends LivePlatform {
     this.userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   }
 
-  buildHeaders (origin, referer, cookie) {
-    const headers = {
-      'User-Agent': this.userAgent,
-      Accept: 'application/json, text/plain, */*',
-      'Accept-Language': 'en,en-US;q=0.9,zh-CN;q=0.8,zh;q=0.7',
-      'X-Requested-With': 'XMLHttpRequest',
-      Referer: referer || `${origin}/`,
-      Origin: origin,
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'same-origin'
-    }
-    if (cookie) headers.Cookie = cookie
-    return headers
+  /**
+   * 用隐藏窗口在真实浏览器上下文里请求 API（绕过 Cloudflare 对 Node.js TLS 指纹的拦截）
+   */
+  browserFetch (pageUrl, apiUrl) {
+    return new Promise((resolve, reject) => {
+      const token = `sc_${Date.now()}_${++fetchTokenSeq}`
+      const timer = setTimeout(() => {
+        ipcRendererUtil.removeListener(IpcChannel.browserFetchReply, listener)
+        reject(new Error('浏览器抓取超时'))
+      }, 30000)
+      const listener = (event, token_, success, result) => {
+        if (token_ !== token) return
+        clearTimeout(timer)
+        ipcRendererUtil.removeListener(IpcChannel.browserFetchReply, listener)
+        if (!success) return reject(new Error(result || '浏览器抓取失败'))
+        try {
+          const parsed = JSON.parse(result)
+          resolve(parsed)
+        } catch (e) {
+          reject(new Error('浏览器抓取结果解析失败'))
+        }
+      }
+      ipcRendererUtil.on(IpcChannel.browserFetchReply, listener)
+      ipcRendererUtil.sendToMain(IpcChannel.browserFetch, token, pageUrl, apiUrl)
+    })
   }
 
   /**
-   * 先从主播页面获取 Cookie（模拟浏览器会话），再用该 Cookie 请求 API
+   * Stripchat 使用 Cloudflare，Node.js 请求会被 TLS 指纹识别拦截（418），
+   * 因此直接用隐藏窗口在真实浏览器里请求。
    */
   async fetchCam (username, origin) {
     origin = origin || 'https://stripchat.com'
     const pageUrl = `${origin}/${username}`
-    let cookie = ''
+    const apiUrl = `${origin}/api/front/v2/models/username/${username}/cam?uniq=${randomUniq(16)}`
+
+    let status = 0
+    let data = null
     try {
-      const pageRes = await HttpUtil.get(pageUrl, {
-        'User-Agent': this.userAgent,
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en,en-US;q=0.9,zh-CN;q=0.8,zh;q=0.7',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none'
-      })
-      // 从响应头提取 set-cookie（axios 可能合并成字符串或数组）
-      const setCookie = pageRes.headers && (pageRes.headers['set-cookie'] || pageRes.headers['Set-Cookie'])
-      if (setCookie) {
-        if (Array.isArray(setCookie)) {
-          cookie = setCookie.map(c => String(c).split(';')[0]).join('; ')
-        } else {
-          cookie = String(setCookie).split(';')[0]
-        }
+      const result = await this.browserFetch(pageUrl, apiUrl)
+      status = result.status
+      try {
+        data = JSON.parse(result.body)
+      } catch (e) {
+        data = null
       }
     } catch (e) {
-      // 页面访问失败仍尝试直接请求 API
+      throw new Error(`Stripchat 抓取失败：${e.message}`)
     }
 
-    const apiUrl = `${origin}/api/front/v2/models/username/${username}/cam?uniq=${randomUniq(16)}`
-    const res = await HttpUtil.get(apiUrl, this.buildHeaders(origin, pageUrl, cookie))
-    const status = res.status
-    const data = res.data
     if (status === 403 || status === 418) {
-      throw new Error(`Stripchat 拒绝了 API 请求（HTTP ${status}），可能是反爬或地区限制，请检查网络/代理设置`)
+      throw new Error(`Stripchat 拒绝了访问（HTTP ${status}），可能是地区限制，请检查网络环境`)
     }
     if (!data || !data.cam) {
       const msg = data && data.error ? data.error : `HTTP ${status}`
