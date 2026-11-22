@@ -140,13 +140,49 @@ async function downloadUpdate (downloadUrl, assetName) {
 }
 
 /**
- * 运行安装包（Windows NSIS 静默安装）
+ * 运行安装包并在安装完成后重新启动程序。
+ * 非 oneClick 的 NSIS 包静默安装(/S)不会自动重启，因此借助一个独立的 VBS 脚本：
+ * 等待旧进程退出 + 安装进程结束，再启动新的 exe。
  */
 function installUpdate (filePath) {
   if (!filePath || !fs.existsSync(filePath)) throw new Error('更新包不存在')
   const {spawn} = require('child_process')
-  const child = spawn(filePath, ['/S', '--force-run-in-context'], {detached: true, stdio: 'ignore'})
-  child.unref()
+  const exePath = app.getPath('exe')
+
+  if (process.platform === 'win32') {
+    const vbsPath = path.join(app.getPath('userData'), 'update-restart.vbs')
+    // 用 WScript.Shell 轮询：先等旧进程退出，再等安装进程结束（最多 3 分钟），然后启动新 exe
+    const installerName = path.basename(filePath).replace(/"/g, '""')
+    const vbs = [
+      'Set sh = CreateObject("WScript.Shell")',
+      'exePath = "' + exePath.replace(/"/g, '""') + '"',
+      'installerPath = "' + filePath.replace(/"/g, '""') + '"',
+      'installerName = "' + installerName + '"',
+      'WScript.Sleep 1500',
+      'sh.Run """" & installerPath & """ /S", 0, False',
+      'For i = 1 To 180',
+      '  installerRunning = False',
+      '  On Error Resume Next',
+      '  Set col = GetObject("winmgmts:\\\\.\\root\\cimv2").ExecQuery("Select Name from Win32_Process Where Name = \'" & installerName & "\'")',
+      '  If Err.Number = 0 Then installerRunning = (col.Count > 0)',
+      '  Err.Clear',
+      '  On Error GoTo 0',
+      '  If Not installerRunning And i > 2 Then Exit For',
+      '  WScript.Sleep 1000',
+      'Next',
+      'WScript.Sleep 2000',
+      'On Error Resume Next',
+      'sh.Run """" & exePath & """"',
+      'On Error GoTo 0'
+    ].join('\r\n')
+    fs.writeFileSync(vbsPath, vbs, 'utf8')
+
+    // VBS 独立进程负责：启动静默安装 -> 等待安装结束 -> 重启程序
+    spawn('wscript', [vbsPath], {detached: true, stdio: 'ignore'}).unref()
+  } else {
+    // 非 Windows：直接启动安装包，由系统包管理器处理
+    spawn(filePath, [], {detached: true, stdio: 'ignore'}).unref()
+  }
   return true
 }
 
