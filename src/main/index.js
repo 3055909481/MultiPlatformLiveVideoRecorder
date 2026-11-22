@@ -127,6 +127,75 @@ function extractDouyinStreamsFromDom () {
 const douyinStreamScript = '(' + extractDouyinStreamsFromDom.toString() + ')()'
 
 /**
+ * 从直播间页面自身渲染的数据里提取主播信息（Next.js/Nuxt 等框架）。
+ * 在页面上下文执行，可绕开被 Cloudflare 拦截的 API 请求。
+ */
+function extractStripchatPageData () {
+  const html = document.documentElement.outerHTML || ''
+  const result = {streamName: '', viewServers: {}, isLive: false, status: '', topic: '', username: ''}
+
+  // 递归在对象里找包含 streamName 的节点
+  const findByKey = (obj, key, depth) => {
+    if (!obj || typeof obj !== 'object' || depth > 12) return null
+    if (Object.prototype.hasOwnProperty.call(obj, key) && obj[key]) return obj
+    for (const k of Object.keys(obj)) {
+      const v = obj[k]
+      if (v && typeof v === 'object') {
+        const found = findByKey(v, key, depth + 1)
+        if (found) return found
+      }
+    }
+    return null
+  }
+
+  // 常见框架全局数据
+  const globals = ['__NEXT_DATA__', '__NUXT__', '__INITIAL_STATE__', '__PRELOADED_STATE__', '__APOLLO_STATE__']
+  let camNode = null
+  for (const g of globals) {
+    try {
+      const data = window[g]
+      if (!data) continue
+      camNode = findByKey(data, 'streamName', 0)
+      if (camNode) break
+    } catch (e) {
+      // 忽略
+    }
+  }
+
+  if (camNode) {
+    result.streamName = camNode.streamName || ''
+    if (camNode.viewServers) result.viewServers = camNode.viewServers
+    if (camNode.topic) result.topic = camNode.topic
+  }
+
+  // HTML 正则兜底（RSC/转义 JSON）
+  if (!result.streamName) {
+    const streamMatch = /\\?"streamName\\?"\s*:\s*\\?"([^"\\]+)\\?"/.exec(html)
+    if (streamMatch) result.streamName = streamMatch[1]
+    const serverMatch = /\\?"flashphoner-hls\\?"\s*:\s*\\?"([^"\\]+)\\?"/.exec(html)
+    if (serverMatch) result.viewServers = {'flashphoner-hls': serverMatch[1]}
+  }
+
+  // 直播状态
+  const statusMatch = /\\?"status\\?"\s*:\s*\\?"(public|private|off|idle|groupShow|p2p[^"\\]*)\\?"/.exec(html)
+  if (statusMatch) {
+    result.status = statusMatch[1]
+    result.isLive = result.status === 'public'
+  }
+  const isLiveMatch = /\\?"isLive\\?"\s*:\s*(true|false)/.exec(html)
+  if (isLiveMatch) result.isLive = isLiveMatch[1] === 'true'
+  // topic
+  if (!result.topic) {
+    const topicMatch = /\\?"topic\\?"\s*:\s*\\?"([^"\\]+)\\?"/.exec(html)
+    if (topicMatch) result.topic = topicMatch[1]
+  }
+
+  return JSON.stringify(result)
+}
+
+const stripchatPageDataScript = '(' + extractStripchatPageData.toString() + ')()'
+
+/**
  * 只有抓到真实流地址才算成功；空 streams 说明数据还没渲染或遇到验证码
  */
 function parseDouyinResult (result) {
@@ -350,6 +419,16 @@ function createWindow () {
       let resultObj = {}
       try { resultObj = JSON.parse(result) } catch (e) { resultObj = {status: 0, body: result} }
       resultObj.pageTitle = pageTitle
+
+      // API 被拦时，直接从页面自身渲染的数据里提取主播信息作为兜底
+      if (resultObj.status === 403 || resultObj.status === 418 || !resultObj.body) {
+        try {
+          const pageDataStr = await fetchWindow.webContents.executeJavaScript(stripchatPageDataScript, true)
+          resultObj.pageData = JSON.parse(pageDataStr)
+        } catch (e) {
+          resultObj.pageData = null
+        }
+      }
       IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.browserFetchReply, token, true, JSON.stringify(resultObj))
     } catch (e) {
       IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.browserFetchReply, token, false, e.message)
