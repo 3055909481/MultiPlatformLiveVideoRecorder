@@ -330,6 +330,25 @@ export default {
         this.record.outPutDir = result[0]
       }
     },
+    // 从直播间链接中提取房间ID/用户名，让「直播间」字段始终显示具体ID而非完整链接
+    extractRoomIdFromUrl (input) {
+      if (!/^https?:\/\//i.test(input)) return null
+      const patterns = [
+        /live\.douyin\.com\/(\d+)/,
+        /www\.douyin\.com\/user\/([^/?#]+)/,
+        /live\.bilibili\.com\/(\d+)/,
+        /www\.douyu\.com\/(\d+)/,
+        /www\.huya\.com\/([^/?#]+)/,
+        /live\.kuaishou\.com\/u\/([^/?#]+)/,
+        /bigo\.tv\/[^/]*\/(\d+)/,
+        /stripchat\.com\/([^/?#]+)/
+      ]
+      for (const pattern of patterns) {
+        const match = pattern.exec(input)
+        if (match) return match[1]
+      }
+      return null
+    },
     getUserInfo () {
       if (!this.record.idOrUrl && this.record.idOrUrl === this.lastParseId) {
         return
@@ -340,7 +359,10 @@ export default {
         this.$message.warning('输入的链接与所选直播平台不匹配，请检查平台选择')
         return
       }
-      new Platform().getUserInfo(this.record.idOrUrl).then(res => {
+      // 用完整链接请求接口，但把输入框显示为具体ID（昵称已有单独字段）
+      const originalInput = this.record.idOrUrl
+      const extractedId = this.extractRoomIdFromUrl(originalInput)
+      new Platform().getUserInfo(originalInput).then(res => {
         console.log(res)
         this.record.idOrUrl = res.idShow
         this.user = res
@@ -353,6 +375,8 @@ export default {
           this.$message.warning('抖音昵称自动获取失败（可能未通过验证），请直接在「昵称」输入框手动填写')
         }
       }).catch(e => {
+        // 获取失败时，直播间字段至少显示从链接提取的ID，不留完整URL
+        if (extractedId) this.record.idOrUrl = extractedId
         this.$message.error('获取用户信息失败：' + (e.message || ''))
       })
     },
