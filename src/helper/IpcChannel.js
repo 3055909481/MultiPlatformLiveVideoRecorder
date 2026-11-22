@@ -2,7 +2,9 @@
 const IpcChannel = {
   stopAllTasks: 'stopAllTasks',
   getDouyinRoomData: 'getDouyinRoomData',
-  getDouyinRoomDataReply: 'getDouyinRoomDataReply'
+  getDouyinRoomDataReply: 'getDouyinRoomDataReply',
+  getDouyuSign: 'getDouyuSign',
+  getDouyuSignReply: 'getDouyuSignReply'
 }
 
 export default IpcChannel

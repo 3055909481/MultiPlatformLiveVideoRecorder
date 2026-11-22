@@ -10,6 +10,28 @@ class BilibiliLivePlatform extends LivePlatform {
       'referer': 'https://live.bilibili.com'
     }
   }
+  /**
+   * getInfoByRoom 容易触发 -352 风控，失败时降级到旧版 get_info
+   */
+  async getRoomInfo (realRoomId) {
+    try {
+      const res = await HttpUtil.get(`https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom?room_id=${realRoomId}`, this.httpHeaders)
+      if (res.data && res.data.code === 0 && res.data.data && res.data.data.room_info) {
+        return {
+          title: res.data.data.room_info.title,
+          name: res.data.data.anchor_info && res.data.data.anchor_info.base_info ? res.data.data.anchor_info.base_info.uname : ''
+        }
+      }
+    } catch (e) {
+      // 风控或网络异常，继续降级
+    }
+    const fallback = await HttpUtil.get(`https://api.live.bilibili.com/room/v1/Room/get_info?room_id=${realRoomId}`, this.httpHeaders)
+    if (!fallback.data || fallback.data.code !== 0 || !fallback.data.data) {
+      throw new Error('获取直播间信息失败')
+    }
+    return {title: fallback.data.data.title, name: fallback.data.data.uname || String(fallback.data.data.uid || '')}
+  }
+
   getUserInfo (idOrUrl) {
     return new Promise(async (resolve, reject) => {
       let roomId = idOrUrl
@@ -25,13 +47,11 @@ class BilibiliLivePlatform extends LivePlatform {
           return
         }
         const realRoomId = roomInitInfoRes.data.data.room_id
-        const roomInfoUrl = `https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom?room_id=${realRoomId}`
-        let roomInfoRes = await HttpUtil.get(roomInfoUrl, this.httpHeaders)
-        const userName = roomInfoRes.data.data.anchor_info.base_info.uname
+        const roomInfo = await this.getRoomInfo(realRoomId)
         resolve({
           id: roomId,
           idShow: roomId,
-          name: userName,
+          name: roomInfo.name,
           roomId: roomId
         })
       } catch (e) {
@@ -55,9 +75,8 @@ class BilibiliLivePlatform extends LivePlatform {
           return
         }
         const realRoomId = roomInitInfoRes.data.data.room_id
-        const roomInfoUrl = `https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom?room_id=${realRoomId}`
-        let roomInfoRes = await HttpUtil.get(roomInfoUrl, this.httpHeaders)
-        const title = roomInfoRes.data.data.room_info.title
+        const roomInfo = await this.getRoomInfo(realRoomId)
+        const title = roomInfo.title
         // 获取直播流数据
         const usableQualityValues = await this.getUsableQualities(realRoomId)
         // 最优清晰度（没有设置的最高清晰度依次向下类推）

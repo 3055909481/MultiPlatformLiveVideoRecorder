@@ -16,9 +16,9 @@ const safeUrl = require('../helper/safe-url')
  * Set `__static` path to static files in production
  * https://simulatedgreg.gitbooks.io/electron-vue/content/en/using-static-assets.html
  */
-if (process.env.NODE_ENV !== 'development') {
-  global.__static = require('path').join(__dirname, '/static').replace(/\\/g, '\\\\')
-}
+global.__static = process.env.NODE_ENV === 'development'
+  ? path.join(__dirname, '../../static')
+  : path.join(__dirname, '/static').replace(/\\/g, '\\\\')
 // 全局错误捕捉
 const errorHandler = (err) => {
   console.error('uncaught', err)
@@ -47,6 +47,68 @@ if (!gotTheLock) {
 
 // 本地代理的启动令牌，renderer 进程通过环境变量继承
 process.env.MPLVR_GATEWAY_TOKEN = crypto.randomBytes(24).toString('hex')
+
+/**
+ * 斗鱼签名代码是动态混淆的，放到无 Node 权限的隐藏窗口里执行，
+ * 避免在主进程/renderer 里运行不可信脚本。
+ */
+function evaluateDouyuSign (rid, code, did, t10) {
+  return new Promise(resolve => {
+    let done = false
+    let timer = null
+    let win = null
+    const finish = (success, data) => {
+      if (done) return
+      done = true
+      if (timer) clearTimeout(timer)
+      if (win && !win.isDestroyed()) win.destroy()
+      IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.getDouyuSignReply, rid, success, data)
+    }
+    timer = setTimeout(() => finish(false, null), 20000)
+    try {
+      win = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+          webSecurity: true,
+          enableRemoteModule: false
+        }
+      })
+      win.loadURL('about:blank').then(async () => {
+        const cryptoSource = fs.readFileSync(path.join(global.__static, 'crypto-js.js'), 'utf8')
+        await win.webContents.executeJavaScript(cryptoSource)
+        const result = await win.webContents.executeJavaScript(
+          `${code}\n;ub98484234(${JSON.stringify(rid)},${JSON.stringify(did)},${JSON.stringify(t10)})`
+        )
+        finish(true, result)
+      }).catch(() => finish(false, null))
+    } catch (e) {
+      finish(false, null)
+    }
+  })
+}
+
+/**
+ * 抖音直播页现在把流地址藏在 RSC/HTML 中，直接从 DOM 文本里提取清晰度映射。
+ * 该函数会被序列化后在隐藏窗口里执行，不能引用外部变量。
+ */
+function extractDouyinStreamsFromDom () {
+  const html = document.documentElement.outerHTML || ''
+  const re = /["\\]+(FULL_HD1|HD1|SD1|SD2)["\\]+\s*[:=]\s*["\\]+(https?:\/\/[^"\\]+)/g
+  const result = {}
+  let match
+  while ((match = re.exec(html)) !== null) {
+    result[match[1]] = match[2]
+      .replace(/\\\//g, '/')
+      .replace(/\\u0026/g, '&')
+      .replace(/&amp;/g, '&')
+  }
+  return JSON.stringify(result)
+}
+
+const douyinStreamScript = '(' + extractDouyinStreamsFromDom.toString() + ')()'
 
 function createWindow () {
   /**
@@ -87,6 +149,11 @@ function createWindow () {
     tray = null
     mainWindow = null
   })
+  // 斗鱼动态签名（浏览器沙箱内执行）
+  IpcMainUtil.on(IpcChannel.getDouyuSign, async (event, rid, code, did, t10) => {
+    await evaluateDouyuSign(rid, code, did, t10)
+  })
+
   // 抖音过验证码弹窗
   let browserWindow
   // 接收renderer事件，抖音获取房间信息
@@ -118,22 +185,9 @@ function createWindow () {
       browserWindow.webContents.on('dom-ready', () => {
         // 页面刷新会触发
         browserWindow.webContents
-          .executeJavaScript(
-            `
-         new Promise((resolve, reject) => {
-           let data = false
-            try {
-              data = document.getElementById('RENDER_DATA').innerText;
-              data = decodeURIComponent(data);
-              console.log(data)
-            } catch(e) {
-            console.log('No roomInfo found')
-            }
-        resolve(data);
-       });
-      `, true).then((result) => {
-            // console.log(result)
-            if (!result) {
+          .executeJavaScript(douyinStreamScript, true).then((result) => {
+            const streamMap = result && result !== '{}' ? result : false
+            if (!streamMap) {
               if (!hasSetShowWindowDelay) {
                 setTimeout(() => {
                   // 未直接获取到房间信息，显示窗口
@@ -144,7 +198,7 @@ function createWindow () {
                 hasSetShowWindowDelay = true
               }
             } else {
-              IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.getDouyinRoomDataReply, url, true, result)
+              IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.getDouyinRoomDataReply, url, true, streamMap)
               if (browserWindow) {
                 browserWindow.destroy()
                 browserWindow = null
@@ -155,20 +209,8 @@ function createWindow () {
       })
       browserWindow.on('close', (closeEvent) => {
         closeEvent.preventDefault()
-        browserWindow.webContents.executeJavaScript(`
-       new Promise((resolve, reject) => {
-       let data = false
-        try {
-          data = document.getElementById('RENDER_DATA').innerText;
-          data = decodeURIComponent(data);
-          console.log(data)
-        } catch(e) {
-        console.log('No roomInfo found')
-        }
-        resolve(data);
-       });
-    `, true).then((result) => {
-          if (result) {
+        browserWindow.webContents.executeJavaScript(douyinStreamScript, true).then((result) => {
+          if (result && result !== '{}') {
             IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.getDouyinRoomDataReply, url, true, result)
           } else {
             IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.getDouyinRoomDataReply, url, false)
