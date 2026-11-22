@@ -22,8 +22,14 @@ class StripchatLivePlatform extends LivePlatform {
   async fetchCam (username) {
     const url = `https://stripchat.com/api/front/v2/models/username/${username}/cam`
     const res = await HttpUtil.get(url, Object.assign({}, this.httpHeaders, {Referer: `https://stripchat.com/${username}`}))
+    const status = res.status
     const data = res.data
-    if (!data || !data.cam) throw new Error('获取 Stripchat 房间信息失败')
+    if (status === 403 || status === 418) {
+      throw new Error(`Stripchat 拒绝了访问（HTTP ${status}），通常是网络环境或地区限制，请检查代理/VPN 设置`)
+    }
+    if (!data || !data.cam) {
+      throw new Error(`获取 Stripchat 房间信息失败（HTTP ${status}），请确认用户名正确且主播页面可访问`)
+    }
     return data
   }
 
@@ -44,12 +50,20 @@ class StripchatLivePlatform extends LivePlatform {
 
   async getUserInfo (idOrUrl) {
     const username = extractUsername(idOrUrl)
-    const data = await this.fetchCam(username)
-    const name = (data.user && data.user.user && data.user.user.username) || username
+    let name = username
+    let namePlaceholder = false
+    try {
+      const data = await this.fetchCam(username)
+      name = (data.user && data.user.user && data.user.user.username) || username
+    } catch (e) {
+      // 网络/反爬导致获取失败时降级用用户名占位，不阻断表单填写
+      namePlaceholder = true
+    }
     return {
       id: username,
       idShow: username,
       name,
+      namePlaceholder,
       roomId: username
     }
   }

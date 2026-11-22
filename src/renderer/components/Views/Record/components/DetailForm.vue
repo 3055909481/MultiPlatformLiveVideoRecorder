@@ -346,8 +346,10 @@ export default {
         this.user = res
         this.record.userName = res.name
         this.lastParseId = res.idShow
-        // 抖音号码占位说明自动识别失败，提示用户手动填写昵称
-        if (Platform.platformInfo.code === 'douyin' && /^\d+$/.test(res.name)) {
+        // 自动识别失败时提示用户手动填写昵称
+        if (res.namePlaceholder) {
+          this.$message.warning('Stripchat 昵称自动获取失败（可能是网络或地区限制），请直接在「昵称」输入框手动填写')
+        } else if (Platform.platformInfo.code === 'douyin' && /^\d+$/.test(res.name)) {
           this.$message.warning('抖音昵称自动获取失败（可能未通过验证），请直接在「昵称」输入框手动填写')
         }
       }).catch(e => {
