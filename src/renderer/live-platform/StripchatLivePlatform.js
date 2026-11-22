@@ -1,34 +1,86 @@
 import LivePlatform from './live-platform.js'
 import HttpUtil from '../utils/http-util.js'
 
-function extractUsername (idOrUrl) {
-  if (!/^https?:\/\//i.test(idOrUrl)) return idOrUrl
-  const match = /https?:\/\/(?:\w+\.)?stripchat\.com\/([a-zA-Z0-9_-]+)/.exec(idOrUrl)
-  return match ? match[1] : idOrUrl
+function parseInput (idOrUrl) {
+  if (!/^https?:\/\//i.test(idOrUrl)) {
+    return {username: idOrUrl, origin: 'https://stripchat.com'}
+  }
+  const match = /^(https?:\/\/[\w.-]*stripchat\.com)\/([a-zA-Z0-9_-]+)/.exec(idOrUrl)
+  if (match) {
+    return {username: match[2], origin: match[1]}
+  }
+  return {username: idOrUrl, origin: 'https://stripchat.com'}
+}
+
+function randomUniq (length) {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  let result = ''
+  for (let i = 0; i < length; i++) result += chars[Math.floor(Math.random() * chars.length)]
+  return result
 }
 
 class StripchatLivePlatform extends LivePlatform {
   constructor () {
     super()
-    this.httpHeaders = {
-      'User-Agent': this.pcUserAgent,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'X-Requested-With': 'XMLHttpRequest',
-      Referer: 'https://stripchat.com/',
-      Accept: 'application/json'
-    }
+    this.userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   }
 
-  async fetchCam (username) {
-    const url = `https://stripchat.com/api/front/v2/models/username/${username}/cam`
-    const res = await HttpUtil.get(url, Object.assign({}, this.httpHeaders, {Referer: `https://stripchat.com/${username}`}))
+  buildHeaders (origin, referer, cookie) {
+    const headers = {
+      'User-Agent': this.userAgent,
+      Accept: 'application/json, text/plain, */*',
+      'Accept-Language': 'en,en-US;q=0.9,zh-CN;q=0.8,zh;q=0.7',
+      'X-Requested-With': 'XMLHttpRequest',
+      Referer: referer || `${origin}/`,
+      Origin: origin,
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-origin'
+    }
+    if (cookie) headers.Cookie = cookie
+    return headers
+  }
+
+  /**
+   * 先从主播页面获取 Cookie（模拟浏览器会话），再用该 Cookie 请求 API
+   */
+  async fetchCam (username, origin) {
+    origin = origin || 'https://stripchat.com'
+    const pageUrl = `${origin}/${username}`
+    let cookie = ''
+    try {
+      const pageRes = await HttpUtil.get(pageUrl, {
+        'User-Agent': this.userAgent,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en,en-US;q=0.9,zh-CN;q=0.8,zh;q=0.7',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none'
+      })
+      // 从响应头提取 set-cookie（axios 可能合并成字符串或数组）
+      const setCookie = pageRes.headers && (pageRes.headers['set-cookie'] || pageRes.headers['Set-Cookie'])
+      if (setCookie) {
+        if (Array.isArray(setCookie)) {
+          cookie = setCookie.map(c => String(c).split(';')[0]).join('; ')
+        } else {
+          cookie = String(setCookie).split(';')[0]
+        }
+      }
+    } catch (e) {
+      // 页面访问失败仍尝试直接请求 API
+    }
+
+    const apiUrl = `${origin}/api/front/v2/models/username/${username}/cam?uniq=${randomUniq(16)}`
+    const res = await HttpUtil.get(apiUrl, this.buildHeaders(origin, pageUrl, cookie))
     const status = res.status
     const data = res.data
     if (status === 403 || status === 418) {
-      throw new Error(`Stripchat 拒绝了访问（HTTP ${status}），通常是网络环境或地区限制，请检查代理/VPN 设置`)
+      throw new Error(`Stripchat 拒绝了 API 请求（HTTP ${status}），可能是反爬或地区限制，请检查网络/代理设置`)
     }
     if (!data || !data.cam) {
-      throw new Error(`获取 Stripchat 房间信息失败（HTTP ${status}），请确认用户名正确且主播页面可访问`)
+      const msg = data && data.error ? data.error : `HTTP ${status}`
+      throw new Error(`获取 Stripchat 房间信息失败（${msg}）`)
     }
     return data
   }
@@ -37,26 +89,26 @@ class StripchatLivePlatform extends LivePlatform {
     const streamName = cam.streamName
     const server = cam.viewServers && cam.viewServers['flashphoner-hls']
     const urls = []
-    if (server && streamName) {
-      urls.push(`https://b-${server}.doppiocdn.com/hls/${streamName}/master/${streamName}_auto.m3u8?playlistType=standard`)
-      urls.push(`https://b-${server}.doppiocdn.com/hls/${streamName}/master/${streamName}.m3u8?playlistType=standard`)
-    }
     if (streamName) {
       urls.push(`https://edge-hls.doppiocdn.com/hls/${streamName}/master/${streamName}_auto.m3u8?playlistType=standard`)
       urls.push(`https://edge-hls.doppiocdn.org/hls/${streamName}/master/${streamName}_auto.m3u8?playlistType=standard`)
+    }
+    if (server && streamName) {
+      urls.push(`https://b-${server}.doppiocdn.com/hls/${streamName}/master/${streamName}_auto.m3u8?playlistType=standard`)
+      urls.push(`https://b-${server}.doppiocdn.com/hls/${streamName}/master/${streamName}.m3u8?playlistType=standard`)
     }
     return urls
   }
 
   async getUserInfo (idOrUrl) {
-    const username = extractUsername(idOrUrl)
+    const {username, origin} = parseInput(idOrUrl)
     let name = username
     let namePlaceholder = false
     try {
-      const data = await this.fetchCam(username)
+      const data = await this.fetchCam(username, origin)
       name = (data.user && data.user.user && data.user.user.username) || username
     } catch (e) {
-      // 网络/反爬导致获取失败时降级用用户名占位，不阻断表单填写
+      // 获取失败时降级用用户名占位，不阻断表单填写
       namePlaceholder = true
     }
     return {
@@ -64,13 +116,15 @@ class StripchatLivePlatform extends LivePlatform {
       idShow: username,
       name,
       namePlaceholder,
+      origin,
       roomId: username
     }
   }
 
   async check (user, preferenceQuality, preferenceChannel) {
     const username = user.roomId || user.id
-    const data = await this.fetchCam(username)
+    const origin = user.origin || 'https://stripchat.com'
+    const data = await this.fetchCam(username, origin)
     const cam = data.cam
     const userStatus = data.user && data.user.user
     const isLive = userStatus && userStatus.isLive === true && userStatus.status === 'public'
@@ -82,7 +136,7 @@ class StripchatLivePlatform extends LivePlatform {
     return {
       streamUrl,
       ffmpegCommandOutputOption: {
-        '-headers': `User-Agent: ${this.pcUserAgent}\r\nReferer: https://stripchat.com/`,
+        '-headers': `User-Agent: ${this.userAgent}\r\nReferer: ${origin}/`,
         '-i': streamUrl,
         '-v': 'trace',
         '-c': 'copy'
@@ -90,14 +144,14 @@ class StripchatLivePlatform extends LivePlatform {
       title: cam.topic || user.name,
       quality: StripchatLivePlatform.defaultConfig.qualities[0],
       channel: preferenceChannel,
-      // 保存备用线路，主线路失败时可切换
       backupStreamUrls: urls.slice(1)
     }
   }
 }
 
 StripchatLivePlatform.getUserRoomOrHomeUrl = function (user) {
-  return 'https://stripchat.com/' + user.id
+  const origin = user.origin || 'https://stripchat.com'
+  return origin + '/' + user.id
 }
 
 StripchatLivePlatform.isSupportedUrl = function (url) {
