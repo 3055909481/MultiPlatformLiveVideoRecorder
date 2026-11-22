@@ -7,6 +7,13 @@
       label-width="100px"
       size="mini">
     <el-form-item
+        prop="idOrUrl">
+      <label slot="label">
+        直播间
+      </label>
+      <el-input v-model="record.idOrUrl" :disabled="!record.platform || edit" @blur="getUserInfo" :placeholder="getIdInputPlaceholder"/>
+    </el-form-item>
+    <el-form-item
         prop="platform">
       <label slot="label">
         直播平台
@@ -23,19 +30,12 @@
       <el-input :value="record.website" disabled/>
     </el-form-item>
     <el-form-item
-        prop="idOrUrl">
-      <label slot="label">
-        ID
-      </label>
-      <el-input v-model="record.idOrUrl" :disabled="!record.platform || edit" @blur="getUserInfo" :placeholder="getIdInputPlaceholder"/>
-    </el-form-item>
-    <el-form-item
         prop="userName">
       <label slot="label">
         昵称
       </label>
       <el-input v-model="record.userName" :disabled="!record.platform || edit"/>
-      <el-tooltip effect="light" content="昵称保存后不可修改！" placement="right">
+      <el-tooltip effect="light" content="若自动识别显示为房间号/ID，可直接在此手动修改。昵称保存后会用于录制文件夹命名。" placement="right">
         <em class="el-icon-warning important-help"></em>
       </el-tooltip>
     </el-form-item>
@@ -346,8 +346,12 @@ export default {
         this.user = res
         this.record.userName = res.name
         this.lastParseId = res.idShow
+        // 抖音号码占位说明自动识别失败，提示用户手动填写昵称
+        if (Platform.platformInfo.code === 'douyin' && /^\d+$/.test(res.name)) {
+          this.$message.warning('抖音昵称自动获取失败（可能未通过验证），请直接在「昵称」输入框手动填写')
+        }
       }).catch(e => {
-        this.$message.error('获取用户信息失败')
+        this.$message.error('获取用户信息失败：' + (e.message || ''))
       })
     },
     save () {
@@ -358,6 +362,8 @@ export default {
       })
     },
     saveRecord () {
+      // 昵称框允许手动修改，保存时同步回 user 对象
+      this.user = Object.assign({}, this.user, {name: this.record.userName})
       let record = {
         platform: {
           code: this.record.platform.platformInfo.code,

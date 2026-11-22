@@ -211,9 +211,10 @@ function createWindow () {
       let hasSetShowWindowDelay = false
       browserWindow = new BrowserWindow({
         parent: mainWindow,
-        height: 500,
-        width: 800,
+        height: 600,
+        width: 1000,
         show: false,
+        title: '抖音验证 - 请在此窗口完成验证后关闭',
         // 该窗口会加载第三方页面：禁用 Node 与远程模块
         webPreferences: {
           nodeIntegration: false,
