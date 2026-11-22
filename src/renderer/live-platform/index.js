@@ -2,13 +2,19 @@ import HuyaLivePlatform from './HuyaLivePlatform'
 import DouyuLivePlatform from './DouyuLivePlatform'
 import DouyinLivePlatform from './DouyinLivePlatform'
 import BilibiliLivePlatform from './BilibiliLivePlatform'
+import KuaishouLivePlatform from './KuaishouLivePlatform'
+import BigoLivePlatform from './BigoLivePlatform'
+import StripchatLivePlatform from './StripchatLivePlatform'
 
 export default {
   platforms: [
     DouyuLivePlatform,
     HuyaLivePlatform,
     DouyinLivePlatform,
-    BilibiliLivePlatform
+    BilibiliLivePlatform,
+    KuaishouLivePlatform,
+    BigoLivePlatform,
+    StripchatLivePlatform
   ],
   getPlatform: function (platformCode) {
     for (const platform of this.platforms) {

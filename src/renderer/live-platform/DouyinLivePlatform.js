@@ -2,6 +2,9 @@ import LivePlatform from './live-platform.js'
 import HttpUtil from '../utils/http-util.js'
 import IpcChannel from '../../helper/IpcChannel'
 import ipcRendererUtil from '../../helper/ipcRendererUtil'
+import '../../helper/douyin-sign'
+
+const douyinHelpers = () => (typeof window !== 'undefined' ? window.__MPLVR_HELPERS : global.__MPLVR_HELPERS)
 
 function getRoomDataFromWindow (liveUrl) {
   return new Promise((resolve, reject) => {
@@ -35,8 +38,10 @@ class DouyinLivePlatform extends LivePlatform {
   constructor () {
     super()
     this.httpHeaders = {
-      'User-Agent': this.pcUserAgent,
-      Referer: 'https://www.douyin.com/'
+      'User-Agent': douyinHelpers().DOUYIN_UA,
+      Referer: 'https://www.douyin.com/',
+      Cookie: douyinHelpers().DOUYIN_TTWID,
+      Accept: 'application/json'
     }
   }
 
@@ -45,16 +50,49 @@ class DouyinLivePlatform extends LivePlatform {
   }
 
   getLiveUrl (webRid) {
-    return `https://live.douyin.com/${webRid}?enter_from_merge=web_others_homepage&enter_method=web_live_btn&room_id=`
+    return `https://live.douyin.com/${webRid}`
   }
 
   /**
-   * 通过隐藏窗口读取直播间数据（流地址 + 昵称），页面有验证码时会自动弹窗让用户通过
+   * 通过 webcast/room/web/enter 接口 + a_bogus 签名拿房间数据（无需验证码）
    */
-  async readLiveRoom (webRid) {
+  async fetchRoomByApi (webRid) {
+    const params = {
+      aid: '6383',
+      app_name: 'douyin_web',
+      live_id: '1',
+      device_platform: 'web',
+      language: 'zh-CN',
+      browser_language: 'zh-CN',
+      browser_platform: 'Win32',
+      browser_name: 'Chrome',
+      browser_version: '125.0.0.0',
+      web_rid: webRid,
+      msToken: ''
+    }
+    let url = 'https://live.douyin.com/webcast/room/web/enter/?' +
+      Object.keys(params).map(k => `${k}=${encodeURIComponent(params[k])}`).join('&')
+    url = douyinHelpers().douyinSignUrl(url)
+    const res = await HttpUtil.get(url, Object.assign({}, this.httpHeaders, {Referer: `https://live.douyin.com/${webRid}`}))
+    const body = res.data
+    if (!body || !body.data || !body.data.data || !body.data.data[0]) return null
+    const room = body.data.data[0]
+    return {
+      nickname: (room.owner && room.owner.nickname) || '',
+      title: room.title || '',
+      status: room.status,
+      idStr: room.id_str || null,
+      secUid: room.owner && room.owner.sec_uid ? room.owner.sec_uid : (body.data.user && body.data.user.sec_uid) || null,
+      streamMap: room.stream_url && room.stream_url.flv_pull_url ? room.stream_url.flv_pull_url : {}
+    }
+  }
+
+  /**
+   * 隐藏窗口兜底（页面结构变化/接口失效时）
+   */
+  async readLiveRoomFromWindow (webRid) {
     const streamDataStr = await getRoomDataFromWindow(this.getLiveUrl(webRid))
     const data = JSON.parse(streamDataStr) || {}
-    // 兼容新旧两种返回结构
     return {
       streamMap: data.streams || data,
       nickname: data.nickname || ''
@@ -68,10 +106,10 @@ class DouyinLivePlatform extends LivePlatform {
       const webRid = liveMatch[1]
       let nickname = ''
       try {
-        const data = await this.readLiveRoom(webRid)
-        nickname = data.nickname || ''
+        const room = await this.fetchRoomByApi(webRid)
+        if (room) nickname = room.nickname || ''
       } catch (e) {
-        // 验证码未通过时先用 webRid 作为昵称占位，录制检查时再获取
+        // 接口失败时用 webRid 占位
       }
       return {
         id: webRid,
@@ -106,7 +144,6 @@ class DouyinLivePlatform extends LivePlatform {
   }
 
   async check (user, preferenceQuality, preferenceChannel) {
-    // 直播间链接保存的 webRid 优先；否则从用户主页解析
     let webRid = user.webRid || null
     let pageInfo = {title: '', roomId: null, webRid: null}
     if (!webRid) {
@@ -114,25 +151,40 @@ class DouyinLivePlatform extends LivePlatform {
       pageInfo = parseUserPage(userRes.data)
       webRid = pageInfo.webRid
     }
-    if (!webRid && !user.roomId) {
-      // 没有 web_rid 也没有历史 app 房间号，认为未开播
-      return null
-    }
+    if (!webRid && !user.roomId) return null
 
     let streamMap = {}
     let liveNickname = ''
     let appRoomId = pageInfo.roomId || user.roomId
+    let roomTitle = ''
+
+    // 主路径：签名 HTTP 接口
     if (webRid) {
       try {
-        const data = await this.readLiveRoom(webRid)
-        streamMap = data.streamMap
-        liveNickname = data.nickname
+        const room = await this.fetchRoomByApi(webRid)
+        if (room) {
+          streamMap = room.streamMap
+          liveNickname = room.nickname
+          roomTitle = room.title
+          if (room.idStr) appRoomId = room.idStr
+        }
       } catch (e) {
-        streamMap = {}
+        // 继续兜底
       }
     }
 
-    // 隐藏窗口抓不到时，尝试旧版 app 接口（语音直播/页面结构变化兜底）
+    // 兜底1：隐藏窗口
+    if (Object.keys(streamMap).length === 0 && webRid) {
+      try {
+        const data = await this.readLiveRoomFromWindow(webRid)
+        streamMap = data.streamMap
+        liveNickname = liveNickname || data.nickname
+      } catch (e) {
+        // 继续兜底
+      }
+    }
+
+    // 兜底2：旧版 app reflow 接口
     if (Object.keys(streamMap).length === 0 && appRoomId) {
       try {
         const res = await HttpUtil.postExchange({
@@ -151,7 +203,7 @@ class DouyinLivePlatform extends LivePlatform {
           appRoomId = room.id_str || appRoomId
         }
       } catch (e) {
-        // 继续走下面的错误提示
+        // 继续走错误提示
       }
     }
 
@@ -166,13 +218,13 @@ class DouyinLivePlatform extends LivePlatform {
     return {
       streamUrl,
       ffmpegCommandOutputOption: {
-        '-headers': `User-Agent: ${this.pcUserAgent}\r\nReferer: https://live.douyin.com/`,
+        '-headers': `User-Agent: ${douyinHelpers().DOUYIN_UA}\r\nReferer: https://live.douyin.com/`,
         '-i': streamUrl,
         '-v': 'trace',
         '-c': 'copy',
         '-flvflags': 'add_keyframe_index'
       },
-      title: pageInfo.title || liveNickname || user.name,
+      title: roomTitle || pageInfo.title || liveNickname || user.name,
       quality: realQuality,
       channel: preferenceChannel,
       roomId: appRoomId
@@ -207,7 +259,7 @@ DouyinLivePlatform.defaultConfig = {
   ],
   defaultQualityCode: 'LG',
   defaultChannelCode: 'DEFAULT',
-  idPlaceholder: '请输入抖音用户主页地址或sec_uid',
+  idPlaceholder: '请输入抖音直播间地址或用户主页',
   dynamicRoomId: true
 }
 

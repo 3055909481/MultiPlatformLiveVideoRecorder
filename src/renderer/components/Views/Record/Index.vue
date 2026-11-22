@@ -39,7 +39,7 @@
           </template>
         </el-table-column>
         <el-table-column
-            label="ID"
+            label="直播间"
         >
           <template scope="scope">
             <el-badge v-if="scope.row.settings.top === 1" value="Top" class="customer-badge-box">

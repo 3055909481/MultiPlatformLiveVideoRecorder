@@ -11,6 +11,11 @@ const IpcMainUtil = {
   sendToRenderer: (window, channel, ...args) => {
     window.webContents.send(channel, ...args)
   },
+  sendToAll: (channel, ...args) => {
+    BrowserWindow.getAllWindows().forEach(window_ => {
+      if (!window_.isDestroyed()) window_.webContents.send(channel, ...args)
+    })
+  },
   on: (channel, listener) => {
     ipcMain.on(channel, listener)
   },

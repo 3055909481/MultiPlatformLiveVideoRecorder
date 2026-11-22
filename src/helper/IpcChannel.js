@@ -4,7 +4,13 @@ const IpcChannel = {
   getDouyinRoomData: 'getDouyinRoomData',
   getDouyinRoomDataReply: 'getDouyinRoomDataReply',
   getDouyuSign: 'getDouyuSign',
-  getDouyuSignReply: 'getDouyuSignReply'
+  getDouyuSignReply: 'getDouyuSignReply',
+  checkUpdate: 'checkUpdate',
+  checkUpdateReply: 'checkUpdateReply',
+  downloadUpdate: 'downloadUpdate',
+  downloadUpdateProgress: 'downloadUpdateProgress',
+  downloadUpdateReply: 'downloadUpdateReply',
+  installUpdate: 'installUpdate'
 }
 
 export default IpcChannel

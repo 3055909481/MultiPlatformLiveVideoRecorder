@@ -10,6 +10,7 @@ import axios from 'axios'
 
 import IpcMainUtil from '../helper/ipcMainUtil'
 import IpcChannel from '../helper/IpcChannel'
+import {registerUpdateHandlers} from './updater'
 import {getAppName, getGatewayExchangeServerPort} from '../helper'
 import '../helper/safe-url'
 /**
@@ -195,6 +196,9 @@ function createWindow () {
   IpcMainUtil.on(IpcChannel.getDouyuSign, async (event, rid, code, did, t10) => {
     await evaluateDouyuSign(rid, code, did, t10)
   })
+
+  // 检查更新 / 下载 / 安装
+  registerUpdateHandlers()
 
   // 抖音过验证码弹窗
   let browserWindow
