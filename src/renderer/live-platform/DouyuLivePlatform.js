@@ -54,6 +54,7 @@ class DouyuLivePlatform extends LivePlatform {
     const html = res.data
     let userName = ''
     const namePatterns = [
+      /<h3[^>]*class="[^"]*anchorName[^"]*"[^>]*>([^<>]+)<\/h3>/,
       /<div class="Title-anchorName" title="([^<>]+)">/,
       /"nickname"\s*:\s*"([^"]+)"/,
       /<h1[^>]*class="[^"]*anchor[^"]*"[^>]*>([^<>]+)<\/h1>/

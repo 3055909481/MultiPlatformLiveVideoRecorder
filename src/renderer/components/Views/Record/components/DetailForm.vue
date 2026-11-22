@@ -120,9 +120,8 @@
       <label slot="label">
         输出文件夹
       </label>
-      <input ref="folderSelect" type="file" @change="fileChange" webkitdirectory hidden></input>
       <el-input readonly v-model="record.outPutDir"></el-input>
-      <el-button type="primary" size="small" @click="$refs.folderSelect.click()">选取</el-button>
+      <el-button type="primary" size="small" @click="chooseOutputDir">选取</el-button>
     </el-form-item>
     <el-form-item>
       <el-button type="success" @click.native="save">保存</el-button>
@@ -133,6 +132,7 @@
 <script>
 import livePlatform from '../../../../live-platform/index'
 import {getSettings} from '../../../../config/settings'
+import {remote} from 'electron'
 export default {
   name: 'DetailForm',
   props: {
@@ -310,12 +310,15 @@ export default {
     }
   },
   methods: {
-    fileChange (event) {
-      if (!event.target.files.length > 0 || !event.target.files[0]) {
-        return
+    chooseOutputDir () {
+      const result = remote.dialog.showOpenDialogSync({
+        title: '选择输出文件夹',
+        properties: ['openDirectory', 'createDirectory']
+      })
+      if (result && result.length > 0) {
+        console.log('选择输出文件夹:', result[0])
+        this.record.outPutDir = result[0]
       }
-      console.log(event.target.files[0].path)
-      this.record.outPutDir = event.target.files[0].path
     },
     getUserInfo () {
       if (!this.record.idOrUrl && this.record.idOrUrl === this.lastParseId) {
