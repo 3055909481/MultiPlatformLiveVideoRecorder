@@ -79,6 +79,7 @@
 
 <script>
 import fs from 'fs'
+import {pathToFileURL} from 'url'
 
 export default {
   name: 'DownloadHistoryView',
@@ -264,8 +265,10 @@ export default {
         this.$message.warning('录制文件不存在！')
         return
       }
-      if (!this.$electron.shell.openExternal(videoAbsolutePath, {activate: true})) {
-        this.$message.error('预览出错！')
+      try {
+        this.$electron.shell.openExternal(pathToFileURL(videoAbsolutePath).toString())
+      } catch (e) {
+        this.$message.error('预览出错：' + (e.message || ''))
       }
     },
     showVideoFileInFolder (downloadReccord) {

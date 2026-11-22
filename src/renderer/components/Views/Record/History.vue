@@ -139,6 +139,7 @@
 <script>
 import SubPage from '../../SubPage'
 import fs from 'fs'
+import {pathToFileURL} from 'url'
 import {getSettings} from '../../../config/settings'
 export default {
   name: 'History',
@@ -314,8 +315,12 @@ export default {
         this.$message.warning('录制文件不存在！')
         return
       }
-      if (!this.$electron.shell.openExternal(videoAbsolutePath, {activate: true})) {
-        this.$message.error('预览出错！')
+      try {
+        // Electron 11 的 openExternal 打开本地文件需传 file:// URL
+        const fileUrl = pathToFileURL(videoAbsolutePath).toString()
+        this.$electron.shell.openExternal(fileUrl)
+      } catch (e) {
+        this.$message.error('预览出错：' + (e.message || ''))
       }
     },
     showVideoFileInFolder (recordHistory) {
@@ -328,8 +333,10 @@ export default {
     },
     openRecordHomeFolder () {
       const fullPath = this.$manager.recordManager.getRecordHomePath(this.record)
-      if (!this.$electron.shell.openExternal(fullPath, {activate: true})) {
-        this.$message.error('打开录制文件夹出错！')
+      try {
+        this.$electron.shell.openExternal(pathToFileURL(fullPath).toString())
+      } catch (e) {
+        this.$message.error('打开录制文件夹出错：' + (e.message || ''))
       }
     },
     addTag (recordHistory) {

@@ -146,6 +146,7 @@ import SysNotice from '../../../config/SysNotice'
 import {getSettings} from '../../../config/settings'
 import LivePlatform from '../../../live-platform/index'
 import {remote} from 'electron'
+import {pathToFileURL} from 'url'
 export default {
   name: 'Index',
   components: {CommonPage},
@@ -341,7 +342,11 @@ export default {
     },
     openRecordHomeFolder (record) {
       const fullPath = this.$manager.recordManager.getRecordHomePath(record)
-      this.$electron.shell.openExternal(fullPath, {activate: true})
+      try {
+        remote.shell.openExternal(pathToFileURL(fullPath).toString())
+      } catch (e) {
+        this.$message.error('打开录制文件夹出错：' + (e.message || ''))
+      }
     },
     editRecord (_id) {
       // 跳转设置编辑页
