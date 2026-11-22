@@ -48,6 +48,47 @@
           <el-option v-for="format in recordVideoOutputFormats" :key="format" :value="format" :label="format.toUpperCase()"/>
         </el-select>
       </el-form-item>
+
+      <el-form-item label-width="0">
+        <div class="settings-section-title">新增录制任务的默认参数</div>
+      </el-form-item>
+      <el-form-item>
+        <label slot="label">
+          默认自动检查
+        </label>
+        <el-switch v-model="globalSettings.defaultAutoCheck"></el-switch>
+        <el-tooltip effect="light" content="新增录制任务默认是否自动检测主播开播" placement="right">
+          <em class="el-icon-warning important-help"></em>
+        </el-tooltip>
+      </el-form-item>
+      <el-form-item>
+        <label slot="label">
+          默认检查间隔
+        </label>
+        <el-select v-model="globalSettings.defaultCheckWindow" :disabled="!globalSettings.defaultAutoCheck">
+          <el-option v-for="w in checkWindowOptions" :key="w.value" :label="w.label" :value="w.value"/>
+        </el-select>
+        <el-tooltip effect="light" content="自动检查时每隔多久检测一次主播是否开播（秒）" placement="right">
+          <em class="el-icon-warning important-help"></em>
+        </el-tooltip>
+      </el-form-item>
+      <el-form-item>
+        <label slot="label">
+          默认自动分片
+        </label>
+        <el-switch v-model="globalSettings.defaultAutoFragment"></el-switch>
+        <el-tooltip effect="light" content="新增录制任务默认是否自动按时间段分片" placement="right">
+          <em class="el-icon-warning important-help"></em>
+        </el-tooltip>
+      </el-form-item>
+      <el-form-item>
+        <label slot="label">
+          默认分片时长
+        </label>
+        <el-select v-model="globalSettings.defaultFragmentLength" :disabled="!globalSettings.defaultAutoFragment">
+          <el-option v-for="f in fragmentLengthOptions" :key="f.value" :label="f.label" :value="f.value"/>
+        </el-select>
+      </el-form-item>
       <el-form-item label-width="0">
         <el-button type="success" @click="save">保存</el-button>
       </el-form-item>
@@ -75,7 +116,16 @@ export default {
         // 哔哩哔哩用户Cookie，用于获取需要登录的才能获取到的高清晰度视频
         biliBiliUserCookie: null,
         // 录制视频文件输出默认格式（仅新增录播生效）
-        defaultRecordVideoOutputFormat: null
+        defaultRecordVideoOutputFormat: null,
+        // 新增录制任务默认参数
+        // 默认是否自动检查（null 时沿用旧行为 false）
+        defaultAutoCheck: false,
+        // 默认检查间隔（秒）
+        defaultCheckWindow: 10,
+        // 默认是否自动分片
+        defaultAutoFragment: false,
+        // 默认分片时长（秒）
+        defaultFragmentLength: 1800
       },
       // 保存进入页面时的设置，用于判断设置是否改变
       oldGlobalSettings: null,
@@ -83,7 +133,18 @@ export default {
       isSave: true,
       // 默认输出文件夹是否应用到所有录制任务，默认false（不应用）
       isDefaultOuPutDirApplyToAllRecords: false,
-      recordVideoOutputFormats: LivePlatform.supportVideoOutPutFormats ? Object.keys(LivePlatform.supportVideoOutPutFormats) : []
+      recordVideoOutputFormats: LivePlatform.supportVideoOutPutFormats ? Object.keys(LivePlatform.supportVideoOutPutFormats) : [],
+      checkWindowOptions: [
+        {label: '5秒', value: 5}, {label: '10秒', value: 10}, {label: '15秒', value: 15},
+        {label: '20秒', value: 20}, {label: '30秒', value: 30}, {label: '1分钟', value: 60},
+        {label: '2分钟', value: 120}, {label: '5分钟', value: 300}, {label: '10分钟', value: 600},
+        {label: '30分钟', value: 1800}, {label: '1小时', value: 3600},
+        {label: '2小时', value: 7200}, {label: '4小时', value: 14400}
+      ],
+      fragmentLengthOptions: [
+        {label: '30分钟', value: 1800}, {label: '1小时', value: 3600},
+        {label: '1小时30分钟', value: 4800}, {label: '2小时', value: 7200}
+      ]
     }
   },
   watch: {
@@ -198,5 +259,13 @@ label {
 }
 .el-form {
   margin-left: 30px;
+}
+.settings-section-title {
+  font-weight: bold;
+  color: #409eff;
+  border-top: 1px solid #ebeef5;
+  padding-top: 15px;
+  margin-top: 5px;
+  width: 50%;
 }
 </style>

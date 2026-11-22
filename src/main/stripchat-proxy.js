@@ -71,6 +71,27 @@ function ensureKeys () {
 }
 
 /**
+ * 检查某个 pkey 是否有解密密钥；没有时尝试重新同步一次（应对 Stripchat 轮换 pkey）
+ */
+async function ensureKeyFor (pkey) {
+  if (!pkey) return false
+  if (keys[pkey]) return true
+  // 本地没有 -> 强制重新拉取社区密钥库
+  await syncKeys()
+  return !!keys[pkey]
+}
+
+// 日志（写入 userData，便于诊断断流原因）
+function logLine (msg) {
+  try {
+    const line = `[${new Date().toISOString()}] ${msg}\n`
+    fs.appendFileSync(path.join(app.getPath('userData'), 'stripchat-proxy.log'), line)
+  } catch (e) {
+    // 忽略
+  }
+}
+
+/**
  * 解密 Mouflon v2 的加密分片名：
  * 反转 -> base64解码(补==) -> SHA256(pdkey) 循环 XOR
  */
@@ -90,12 +111,15 @@ function decryptSegmentName (encoded, pdkey) {
 /**
  * 从 m3u8 文本里解析 pkey（#EXT-X-MOUFLON:PSCH:v2:{pkey}）和加密分片行
  */
-function rewritePlaylist (m3u8Text, sourceUrl) {
+async function rewritePlaylist (m3u8Text, sourceUrl) {
   const lines = m3u8Text.split(/\r?\n/)
   let pkey = ''
   const pkeyMatch = /#EXT-X-MOUFLON:PSCH:v2:([A-Za-z0-9]+)/.exec(m3u8Text)
   if (pkeyMatch) pkey = pkeyMatch[1]
-  const pdkey = pkey ? keys[pkey] : ''
+  // 确保该 pkey 有密钥，没有则现场重新同步（关键：应对 pkey 轮换导致的断流）
+  const hasKey = await ensureKeyFor(pkey)
+  const pdkey = hasKey ? keys[pkey] : ''
+  if (!hasKey && pkey) logLine(`WARN 缺少 pkey=${pkey} 的解密密钥，分片将无法还原`)
 
   const out = []
   let decryptedCount = 0
@@ -116,8 +140,11 @@ function rewritePlaylist (m3u8Text, sourceUrl) {
       // 无密钥时跳过该占位行
       continue
     }
-    // 跳过占位分片行（media.mp4）与 MOUFLON 标签
-    if (line.trim() === 'https://media-hls.doppiocdn.com/media.mp4') continue
+    // 跳过占位分片行（media.mp4，路径前缀可能是 b-hls-16 等任意子目录）与 MOUFLON 标签。
+    // 关键：如果不删这些占位行，ffmpeg 会在每个真实分片后尝试下载无效的 media.mp4(404) 导致断流。
+    const trimmed = line.trim()
+    if (/\/media\.mp4(\?|$)/.test(trimmed)) continue
+    if (trimmed.endsWith('/media.mp4')) continue
     if (line.startsWith('#EXT-X-MOUFLON:FILE:')) continue
     out.push(line)
   }
@@ -139,21 +166,35 @@ function registerStripchatRoutes (server) {
       return
     }
     try {
-      const upstream = await axios.get(target, {
-        timeout: 15000,
-        headers: {'User-Agent': BROWSER_UA, Referer: 'https://stripchat.com/'},
-        maxRedirects: 5,
-        validateStatus: () => true
-      })
-      if (upstream.status !== 200) {
-        res.status(502).send('Upstream status ' + upstream.status)
+      // 上游偶发 403/5xx 时限流重试，避免直接断流（最多3次）
+      let upstream = null
+      let lastStatus = 0
+      for (let attempt = 0; attempt < 3; attempt++) {
+        upstream = await axios.get(target, {
+          timeout: 15000,
+          headers: {'User-Agent': BROWSER_UA, Referer: 'https://stripchat.com/'},
+          maxRedirects: 5,
+          validateStatus: () => true
+        })
+        lastStatus = upstream.status
+        if (upstream.status === 200) break
+        logLine(`上游返回 ${upstream.status}，第 ${attempt + 1} 次重试: ${target.slice(0, 80)}`)
+        await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)))
+      }
+      if (lastStatus !== 200) {
+        logLine(`上游最终失败 status=${lastStatus}，返回502`)
+        res.status(502).send('Upstream status ' + lastStatus)
         return
       }
-      const rewritten = rewritePlaylist(upstream.data, target)
+      const rewritten = await rewritePlaylist(upstream.data, target)
+      if (rewritten.decryptedCount === 0 && /MOUFLON:URI/.test(upstream.data)) {
+        logLine(`WARN 播放列表有加密分片但0个被解密（pkey=${rewritten.pkey}），ffmpeg可能断流`)
+      }
       res.set('Content-Type', 'application/vnd.apple.mpegurl')
       res.set('Cache-Control', 'no-cache')
       res.send(rewritten.text)
     } catch (e) {
+      logLine(`代理异常: ${e.message}`)
       res.status(502).send(e.message || 'Proxy error')
     }
   })

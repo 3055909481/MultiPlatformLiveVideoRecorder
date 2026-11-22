@@ -159,6 +159,14 @@ export default {
       if (this.globalSettings.defaultRecordVideoOutputFormat) {
         this.record.fileFormat = this.globalSettings.defaultRecordVideoOutputFormat
       }
+      // 新增录制任务时应用全局默认参数（编辑模式由数据库值覆盖，不受影响）
+      if (!this.edit) {
+        const gs = this.globalSettings
+        if (typeof gs.defaultAutoCheck === 'boolean') this.record.autoCheck = gs.defaultAutoCheck
+        if (gs.defaultCheckWindow !== undefined && gs.defaultCheckWindow !== null) this.record.checkWindow = gs.defaultCheckWindow
+        if (typeof gs.defaultAutoFragment === 'boolean') this.record.autoFragment = gs.defaultAutoFragment
+        if (gs.defaultFragmentLength !== undefined && gs.defaultFragmentLength !== null) this.record.fragmentLength = gs.defaultFragmentLength
+      }
       console.log({settings: this.globalSettings})
     }).catch(e => {
       console.log(e)
