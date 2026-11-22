@@ -272,6 +272,16 @@ export default {
       },
       deep: true
     },
+    'record.idOrUrl': {
+      handler (val) {
+        if (!val || !/^https?:\/\//i.test(val)) return
+        const platform = livePlatform.detectPlatformByUrl(val)
+        if (platform && (!this.record.platform || platform.platformInfo.code !== this.record.platform.platformInfo.code)) {
+          this.record.platform = platform
+          this.$message.success(`已自动识别平台：${platform.platformInfo.name}`)
+        }
+      }
+    },
     recordId (newRecordId) {
       if (this.edit) {
         // 编辑模式，数据库加载录制设置

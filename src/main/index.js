@@ -105,24 +105,38 @@ function extractDouyinStreamsFromDom () {
       .replace(/\\u0026/g, '&')
       .replace(/&amp;/g, '&')
   }
-  // 直播间标题/主播昵称（页面里可能是 RSC 转义 JSON）
+  // 主播昵称：document.title 就是当前直播间标题，最可靠
   let nickname = ''
-  const nickPatterns = [
-    /\\?"nickname\\?"\s*:\s*\\?"([^"\\]{1,64})\\?"/,
-    /\\?"anchorName\\?"\s*:\s*\\?"([^"\\]{1,64})\\?"/,
-    /<title[^>]*>([^<]{1,64})<\/title>/
-  ]
-  for (const pattern of nickPatterns) {
-    const found = pattern.exec(html)
-    if (found) {
-      nickname = found[1].replace(/\\u0026/g, '&')
-      break
-    }
+  if (document.title) {
+    nickname = document.title
+      .replace(/的直播间.*$/, '')
+      .replace(/\s*[-—|]\s*抖音.*$/, '')
+      .replace(/^直播中\s*[-—:]?\s*/, '')
+      .trim()
+    if (nickname.length > 64) nickname = ''
+  }
+  // title 是验证码页等无效内容时，退回 RSC 数据里的 nickname
+  if (!nickname || /验证码|抖音-记录|抖音官网/.test(nickname)) {
+    const nickMatch = /\\?"nickname\\?"\s*:\s*\\?"([^"\\]{1,64})\\?"/.exec(html)
+    if (nickMatch) nickname = nickMatch[1].replace(/\\u0026/g, '&')
   }
   return JSON.stringify({streams: streams, nickname: nickname})
 }
 
 const douyinStreamScript = '(' + extractDouyinStreamsFromDom.toString() + ')()'
+
+/**
+ * 只有抓到真实流地址才算成功；空 streams 说明数据还没渲染或遇到验证码
+ */
+function parseDouyinResult (result) {
+  try {
+    const data = JSON.parse(result)
+    if (data && data.streams && Object.keys(data.streams).length > 0) return data
+  } catch (e) {
+    // 忽略解析错误
+  }
+  return null
+}
 
 function createWindow () {
   /**
@@ -209,37 +223,45 @@ function createWindow () {
           enableRemoteModule: false
         }
       })
+      // 数据渲染需要时间，轮询重试直到拿到流地址
+      const pollStreamData = (attemptsLeft) => {
+        if (!browserWindow || browserWindow.isDestroyed() || attemptsLeft <= 0) return
+        browserWindow.webContents.executeJavaScript(douyinStreamScript, true).then((result) => {
+          const data = parseDouyinResult(result)
+          if (data) {
+            IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.getDouyinRoomDataReply, url, true, JSON.stringify(data))
+            if (browserWindow) {
+              browserWindow.destroy()
+              browserWindow = null
+            }
+            failed = false
+            return
+          }
+          if (!browserWindow || browserWindow.isDestroyed()) return
+          if (!hasSetShowWindowDelay && attemptsLeft <= 6) {
+            // 仍未拿到数据，显示窗口让用户通过验证码
+            browserWindow.show()
+            hasSetShowWindowDelay = true
+          }
+          setTimeout(() => pollStreamData(attemptsLeft - 1), 800)
+        }).catch(() => {
+          setTimeout(() => pollStreamData(attemptsLeft - 1), 800)
+        })
+      }
       browserWindow.loadURL(url)
       browserWindow.webContents.on('dom-ready', () => {
-        // 页面刷新会触发
-        browserWindow.webContents
-          .executeJavaScript(douyinStreamScript, true).then((result) => {
-            const streamMap = result && result !== '{}' ? result : false
-            if (!streamMap) {
-              if (!hasSetShowWindowDelay) {
-                setTimeout(() => {
-                  // 未直接获取到房间信息，显示窗口
-                  if (failed && browserWindow && !browserWindow.destroyed()) {
-                    browserWindow.show()
-                  }
-                }, 4000)
-                hasSetShowWindowDelay = true
-              }
-            } else {
-              IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.getDouyinRoomDataReply, url, true, streamMap)
-              if (browserWindow) {
-                browserWindow.destroy()
-                browserWindow = null
-              }
-              failed = false
-            }
-          })
+        // 页面刷新会重新触发，避免重复轮询
+        if (!hasSetShowWindowDelay && !browserWindow.__douyinPolling) {
+          browserWindow.__douyinPolling = true
+          pollStreamData(15)
+        }
       })
       browserWindow.on('close', (closeEvent) => {
         closeEvent.preventDefault()
         browserWindow.webContents.executeJavaScript(douyinStreamScript, true).then((result) => {
-          if (result && result !== '{}') {
-            IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.getDouyinRoomDataReply, url, true, result)
+          const data = parseDouyinResult(result)
+          if (data) {
+            IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.getDouyinRoomDataReply, url, true, JSON.stringify(data))
           } else {
             IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.getDouyinRoomDataReply, url, false)
           }
