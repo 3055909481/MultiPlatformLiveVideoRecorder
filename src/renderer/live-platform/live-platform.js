@@ -1,4 +1,4 @@
-const preferenceHelper = require('../../helper/preference')
+import '../../helper/preference'
 
 class LivePlatform {
   constructor () {
@@ -100,7 +100,8 @@ LivePlatform.migratePreference = (platform, saved, type) => {
   const isChannel = type === 'channel'
   const options = platform && platform.defaultConfig ? platform.defaultConfig[isChannel ? 'channels' : 'qualities'] : []
   const defaultCode = platform && platform.defaultConfig ? platform.defaultConfig[isChannel ? 'defaultChannelCode' : 'defaultQualityCode'] : undefined
-  return preferenceHelper.migratePreference(options, saved, defaultCode)
+  const helpers = typeof window !== 'undefined' ? window.__MPLVR_HELPERS : global.__MPLVR_HELPERS
+  return helpers.migratePreference(options, saved, defaultCode)
 }
 
 LivePlatform.getPreference = (findKey, orderKey, findArray, filterArray, value) => {

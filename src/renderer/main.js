@@ -22,8 +22,23 @@ Vue.http = Vue.prototype.$http = axios
 Vue.prototype.$dbs = dbs
 Vue.config.productionTip = false
 
+// 启动失败时直接显示错误，避免只留下白屏
+function showFatalError (error) {
+  const message = error && error.stack ? error.stack : String(error)
+  console.error('renderer init failed:', message)
+  const container = document.createElement('div')
+  container.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:99999;background:#fff;color:#b00;padding:24px;font:13px Consolas,monospace;white-space:pre-wrap;overflow:auto'
+  container.textContent = '应用启动失败：\n\n' + message
+  document.body.appendChild(container)
+}
+
 // 全局设置
-Global.init()
+try {
+  Global.init()
+} catch (error) {
+  showFatalError(error)
+  throw error
+}
 
 // 全局唯一
 Vue.use(manager)

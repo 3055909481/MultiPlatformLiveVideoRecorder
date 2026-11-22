@@ -2,6 +2,9 @@
 
 const CryptoJS = require('crypto-js')
 
+const root = typeof window !== 'undefined' ? window : global
+root.__MPLVR_HELPERS = root.__MPLVR_HELPERS || {}
+
 const MIXIN_KEY_ENC_TAB = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
   27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
@@ -9,7 +12,7 @@ const MIXIN_KEY_ENC_TAB = [
   22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52
 ]
 
-function extractWbiKeys (navData) {
+root.__MPLVR_HELPERS.extractWbiKeys = function (navData) {
   const wbiImg = navData && navData.data && navData.data.wbi_img
   if (!wbiImg || !wbiImg.img_url || !wbiImg.sub_url) {
     throw new Error('无法获取 B 站 WBI 密钥')
@@ -20,7 +23,7 @@ function extractWbiKeys (navData) {
   }
 }
 
-function sign (params, imgKey, subKey) {
+root.__MPLVR_HELPERS.signWbi = function (params, imgKey, subKey) {
   const raw = imgKey + subKey
   const mixinKey = MIXIN_KEY_ENC_TAB.map(i => raw[i]).join('').slice(0, 32)
   const signed = Object.assign({}, params, {wts: Math.floor(Date.now() / 1000)})
@@ -31,6 +34,3 @@ function sign (params, imgKey, subKey) {
   signed.w_rid = CryptoJS.MD5(query + mixinKey).toString()
   return signed
 }
-
-exports.extractWbiKeys = extractWbiKeys
-exports.sign = sign

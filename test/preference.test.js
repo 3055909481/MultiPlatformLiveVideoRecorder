@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const {migratePreference} = require('../src/helper/preference')
+require('../src/helper/preference')
+const migratePreference = global.__MPLVR_HELPERS.migratePreference
 
 const qualities = [
   {code: 'GQ', name: '高清', value: 150, orderIndex: 1},

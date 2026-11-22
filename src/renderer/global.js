@@ -26,9 +26,13 @@ const Global = {
       return fmt
     }
 
-    console.log(ffmpegStatic)
-    // ffmpeg-static node_moudles 删除其他平台二进制文件或修改package.json
-    ffmpeg.setFfmpegPath(ffmpegStatic.path.replace('app.asar', 'app.asar.unpacked'))
+    // ffmpeg-static 5.x 直接导出路径字符串，旧版本是 { path }
+    const ffmpegPath = typeof ffmpegStatic === 'string' ? ffmpegStatic : (ffmpegStatic && ffmpegStatic.path)
+    if (!ffmpegPath) {
+      throw new Error('无法定位 ffmpeg 可执行文件')
+    }
+    // 打包后二进制位于 app.asar.unpacked
+    ffmpeg.setFfmpegPath(ffmpegPath.replace('app.asar', 'app.asar.unpacked'))
 
     // 递归创建目录 同步方法
     fs.mkdirsSync = function (dirname) {
@@ -41,16 +45,6 @@ const Global = {
         }
       }
     }
-    // linkedom 解决找不到globalThis问题, 修改node_modules/linkedom/node_modules/htmlparser2/lib/esm/index.js，parseFeed替换成下面导出方式
-    /*
-    // 替换函数
-    const parseFeed = function (feed, options = { xmlMode: true }) {
-      return getFeed(parseDOM(feed, options));
-    }
-    export parseFeed;
-    */
-    // eslint-disable-next-line no-undef
-    global.globalThis = {}
   }
 }
 export default Global

@@ -1,10 +1,12 @@
 'use strict'
 
+const root = typeof window !== 'undefined' ? window : global
+root.__MPLVR_HELPERS = root.__MPLVR_HELPERS || {}
+
 /**
  * 只允许访问公网 http(s) 地址，避免本地代理被用于探测内网服务。
- * 以 CommonJS 导出，方便主进程与 Node 测试共用。
  */
-function isSafeTargetUrl (rawUrl) {
+root.__MPLVR_HELPERS.isSafeTargetUrl = function (rawUrl) {
   let url
   try {
     url = new URL(rawUrl)
@@ -19,5 +21,3 @@ function isSafeTargetUrl (rawUrl) {
   if (host.endsWith('.local') || host.endsWith('.internal')) return false
   return true
 }
-
-exports.isSafeTargetUrl = isSafeTargetUrl

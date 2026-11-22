@@ -1,6 +1,10 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const wbi = require('../src/helper/bilibili-wbi')
+require('../src/helper/bilibili-wbi')
+const wbi = {
+  extractWbiKeys: global.__MPLVR_HELPERS.extractWbiKeys,
+  sign: global.__MPLVR_HELPERS.signWbi
+}
 
 test('从 nav 数据中提取 WBI key', () => {
   const nav = {

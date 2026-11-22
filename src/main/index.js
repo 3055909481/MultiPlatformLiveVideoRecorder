@@ -11,7 +11,7 @@ import axios from 'axios'
 import IpcMainUtil from '../helper/ipcMainUtil'
 import IpcChannel from '../helper/IpcChannel'
 import {getAppName, getGatewayExchangeServerPort} from '../helper'
-const safeUrl = require('../helper/safe-url')
+import '../helper/safe-url'
 /**
  * Set `__static` path to static files in production
  * https://simulatedgreg.gitbooks.io/electron-vue/content/en/using-static-assets.html
@@ -140,12 +140,25 @@ function createWindow () {
     // mainWindow.webContents.openDevTools()
     mainWindow.show()
   })
+  let closeFallbackTimer = null
   mainWindow.on('close', event => {
+    if (closeFallbackTimer) return
+    // 通知 renderer 停止任务并自行退出；如果 renderer 已崩溃或没有响应，
+    // 3 秒后强制销毁窗口，避免出现关不掉的“僵尸窗口”。
     event.preventDefault()
-    // 有正在进行中的任务，询问是否停止后关闭，关闭过程交由Renderer
     IpcMainUtil.stopAllTasks()
+    closeFallbackTimer = setTimeout(() => {
+      closeFallbackTimer = null
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.destroy()
+      }
+    }, 3000)
   })
   mainWindow.on('closed', () => {
+    if (closeFallbackTimer) {
+      clearTimeout(closeFallbackTimer)
+      closeFallbackTimer = null
+    }
     tray = null
     mainWindow = null
   })
@@ -273,7 +286,7 @@ async function requestSafe (config, redirectsLeft = 3) {
   if (location && [301, 302, 303, 307, 308].includes(status)) {
     if (redirectsLeft <= 0) throw new Error('Too many redirects')
     const nextUrl = new URL(location, config.url).toString()
-    if (!safeUrl.isSafeTargetUrl(nextUrl)) throw new Error('Redirect target not allowed')
+    if (!global.__MPLVR_HELPERS.isSafeTargetUrl(nextUrl)) throw new Error('Redirect target not allowed')
     const switchToGet = status === 303 && config.method !== 'get'
     return requestSafe({
       ...config,
@@ -320,7 +333,7 @@ function startGatewayExchangeServer () {
       res.status(400).send('Method not allowed')
       return
     }
-    if (!safeUrl.isSafeTargetUrl(config.url)) {
+    if (!global.__MPLVR_HELPERS.isSafeTargetUrl(config.url)) {
       res.status(400).send('Target URL not allowed')
       return
     }

@@ -1,6 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const {isSafeTargetUrl} = require('../src/helper/safe-url')
+require('../src/helper/safe-url')
+const isSafeTargetUrl = global.__MPLVR_HELPERS.isSafeTargetUrl
 
 test('允许访问公网 http(s) 平台地址', () => {
   assert.equal(isSafeTargetUrl('https://www.douyu.com/12345'), true)

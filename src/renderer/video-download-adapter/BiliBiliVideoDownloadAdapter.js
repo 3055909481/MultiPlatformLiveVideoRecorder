@@ -2,8 +2,12 @@ import VideoDownloadAdapter from './VideoDownloadAdapter'
 import httpUtil from '../utils/http-util'
 import {getSettings} from '../config/settings'
 
-const wbi = require('../../helper/bilibili-wbi')
+import '../../helper/bilibili-wbi'
 const qs = require('query-string')
+
+function wbiHelpers () {
+  return typeof window !== 'undefined' ? window.__MPLVR_HELPERS : global.__MPLVR_HELPERS
+}
 
 let wbiKeys = null
 let wbiKeysExpire = 0
@@ -11,10 +15,10 @@ let wbiKeysExpire = 0
 async function signedParams (params) {
   if (!wbiKeys || Date.now() > wbiKeysExpire) {
     const nav = await httpUtil.get('https://api.bilibili.com/x/web-interface/nav')
-    wbiKeys = wbi.extractWbiKeys(nav.data)
+    wbiKeys = wbiHelpers().extractWbiKeys(nav.data)
     wbiKeysExpire = Date.now() + 6 * 60 * 60 * 1000
   }
-  return wbi.sign(params, wbiKeys.imgKey, wbiKeys.subKey)
+  return wbiHelpers().signWbi(params, wbiKeys.imgKey, wbiKeys.subKey)
 }
 
 function parseVideoInfo (html) {

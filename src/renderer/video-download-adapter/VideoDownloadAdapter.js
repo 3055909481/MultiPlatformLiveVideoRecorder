@@ -1,4 +1,4 @@
-const preferenceHelper = require('../../helper/preference')
+import '../../helper/preference'
 
 class VideoDownloadAdapter {
   constructor () {
@@ -35,7 +35,8 @@ VideoDownloadAdapter.supportVideoOutPutFormats = {
  */
 VideoDownloadAdapter.migratePreference = (adapter, saved) => {
   const options = adapter && adapter.defaultConfig ? adapter.defaultConfig.qualities : []
-  return preferenceHelper.migratePreference(options, saved, null)
+  const helpers = typeof window !== 'undefined' ? window.__MPLVR_HELPERS : global.__MPLVR_HELPERS
+  return helpers.migratePreference(options, saved, null)
 }
 
 VideoDownloadAdapter.setFFmpegOutputOptions = (ffmpeg_, ffmpegOutputOption) => {
