@@ -139,7 +139,6 @@
 <script>
 import SubPage from '../../SubPage'
 import fs from 'fs'
-import {pathToFileURL} from 'url'
 import {getSettings} from '../../../config/settings'
 export default {
   name: 'History',
@@ -315,13 +314,13 @@ export default {
         this.$message.warning('录制文件不存在！')
         return
       }
-      try {
-        // Electron 11 的 openExternal 打开本地文件需传 file:// URL
-        const fileUrl = pathToFileURL(videoAbsolutePath).toString()
-        this.$electron.shell.openExternal(fileUrl)
-      } catch (e) {
+      // Electron 12+ 用 openPath 打开本地文件（返回 Promise），openExternal 对本地路径不可靠
+      const shell = (this.$electron && this.$electron.shell) || require('electron').shell
+      Promise.resolve(shell.openPath(videoAbsolutePath)).then(err => {
+        if (err) this.$message.error('预览出错：' + err)
+      }).catch(e => {
         this.$message.error('预览出错：' + (e.message || ''))
-      }
+      })
     },
     showVideoFileInFolder (recordHistory) {
       const videoAbsolutePath = recordHistory.file.absolutePath
@@ -333,11 +332,12 @@ export default {
     },
     openRecordHomeFolder () {
       const fullPath = this.$manager.recordManager.getRecordHomePath(this.record)
-      try {
-        this.$electron.shell.openExternal(pathToFileURL(fullPath).toString())
-      } catch (e) {
+      const shell = (this.$electron && this.$electron.shell) || require('electron').shell
+      Promise.resolve(shell.openPath(fullPath)).then(err => {
+        if (err) this.$message.error('打开录制文件夹出错：' + err)
+      }).catch(e => {
         this.$message.error('打开录制文件夹出错：' + (e.message || ''))
-      }
+      })
     },
     addTag (recordHistory) {
       if (recordHistory.tags && recordHistory.tags.length === 6) {
