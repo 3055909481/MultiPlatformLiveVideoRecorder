@@ -97,6 +97,24 @@
           <el-option v-for="f in fragmentLengthOptions" :key="f.value" :label="f.label" :value="f.value"/>
         </el-select>
       </el-form-item>
+      <el-form-item>
+        <label slot="label">
+          续录间隔(分钟)
+        </label>
+        <el-input-number v-model="globalSettings.resumeGapMinutes" :min="1" :max="1440" :step="1"></el-input-number>
+        <el-tooltip effect="light" content="录制中断后重新开始时，若与上次录制间隔在此时间内且上次文件未达分片时长，则续接到原文件" placement="right">
+          <em class="el-icon-warning important-help"></em>
+        </el-tooltip>
+      </el-form-item>
+      <el-form-item>
+        <label slot="label">
+          开始录制时通知
+        </label>
+        <el-switch v-model="globalSettings.enableStartNotice"></el-switch>
+        <el-tooltip effect="light" content="每次开始录制时发送系统通知" placement="right">
+          <em class="el-icon-warning important-help"></em>
+        </el-tooltip>
+      </el-form-item>
       <el-form-item label-width="0">
         <el-button type="success" @click="save">保存</el-button>
       </el-form-item>
@@ -135,7 +153,11 @@ export default {
         // 默认是否自动分片
         defaultAutoFragment: false,
         // 默认分片时长（秒）
-        defaultFragmentLength: 1800
+        defaultFragmentLength: 1800,
+        // 续录间隔（分钟）：中断后重新开始时，间隔在此时间内且上次文件未达分片时长则续接
+        resumeGapMinutes: 10,
+        // 开始录制时是否发送系统通知
+        enableStartNotice: true
       },
       // 保存进入页面时的设置，用于判断设置是否改变
       oldGlobalSettings: null,

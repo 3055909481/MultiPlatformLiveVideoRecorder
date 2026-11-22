@@ -446,7 +446,10 @@ export default {
       console.log(record)
       console.log(this.$dbs.record.filename)
       if (this.edit) {
-        this.$dbs.record.update({_id: this.recordId}, {$set: {settings: record.settings}}, {}, (e, num) => {
+        // 编辑保存时若启用了自动检查，清空上次检查时间让它立即开始检查
+        const updateSet = {settings: record.settings}
+        if (this.record.autoCheck) updateSet.lastCheckTime = null
+        this.$dbs.record.update({_id: this.recordId}, {$set: updateSet}, {}, (e, num) => {
           console.log('更新：' + num)
           if (e) {
             console.log(e)

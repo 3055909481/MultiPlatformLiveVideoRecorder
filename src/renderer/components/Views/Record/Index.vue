@@ -247,8 +247,10 @@ export default {
           recordUpdated.qualityName = recordHistory.quality.name
           recordUpdated.channelName = recordHistory.channel.name
         })
-        // 发送通知开始录制
-        SysNotice.createNotice(`开始录制`, `${record.platform.name} - ${record.user.name}`)
+        // 发送通知开始录制（可在设置里关闭）
+        if (this.globalSettings.enableStartNotice !== false) {
+          SysNotice.createNotice(`开始录制`, `${record.platform.name} - ${record.user.name}`)
+        }
         console.log('开始录制' + record._id)
       }).onDoing((options, record, recordHistory) => {
         this.changeRecordRow(record, recordUpdated => {
@@ -277,11 +279,18 @@ export default {
       return callback
     },
     autoCheckChange (enable, record) {
-      this.$dbs.record._update_({_id: record._id}, {$set: {'settings.autoCheck': enable}}, {}).then(_ => {
+      // 启用时清空上次检查时间，让扫描循环立即检查（否则要等旧检查窗口过去）
+      const update = enable
+        ? {$set: {'settings.autoCheck': enable, lastCheckTime: null}}
+        : {$set: {'settings.autoCheck': enable}}
+      this.$dbs.record._update_({_id: record._id}, update, {}).then(_ => {
         // 刷新表格行数据
         this.changeRecordRow(record, recordUpdated => {
           recordUpdated.settings.autoCheck = enable
+          recordUpdated.lastCheckTime = null
         })
+        // 立即触发一次检查，不必等下一轮扫描
+        if (enable) this.$manager.recordManager.checkAndStartRecord(record._id)
       }).catch(e => {
         this.$message.error(`录制任务${record.user.name}: {enable ? '启用' : '禁用'}自动检查失败`)
         // 刷新表格行数据
@@ -312,10 +321,13 @@ export default {
           })
           break
         case 'enableAutoCheck':
-          this.$dbs.record._update_({_id: record._id}, {$set: {'settings.autoCheck': true}}, {}).then(_ => {
+          // 启用时清空检查时间并立即检查
+          this.$dbs.record._update_({_id: record._id}, {$set: {'settings.autoCheck': true, lastCheckTime: null}}, {}).then(_ => {
             this.changeRecordRow(record, recordUpdated => {
               recordUpdated.settings.autoCheck = true
+              recordUpdated.lastCheckTime = null
             })
+            this.$manager.recordManager.checkAndStartRecord(record._id)
           }).catch(e => {
             this.$message.error('启用自动检查失败')
           })

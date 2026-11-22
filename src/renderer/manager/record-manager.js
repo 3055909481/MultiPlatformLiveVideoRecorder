@@ -29,6 +29,8 @@ const recordManager = new Vue({
       stopCallbackMap: {},
       // 录制异常中断的退避信息：{recordId: {failures, lastFailTime}}
       reconnectBackoff: {},
+      // 续录状态：{recordId: {targetPath, tempPath}}
+      resumeState: {},
       // 设为false关闭自动扫描检查录制
       checkRunning: true,
       // 检查扫描窗口（ms）
@@ -298,12 +300,32 @@ const recordManager = new Vue({
         fs.mkdirsSync(fileDir)
         const fileName = illegalPathCharRemove(`${new Date().Format('yyyy-MM-dd [HH-mm-ss]')} ${result.title}`) + `.${record.settings.fileFormat}`
         // 输出文件路径
-        const outFilePath = path.join(fileDir, fileName)
+        let outFilePath = path.join(fileDir, fileName)
+        let actualOutputPath = outFilePath
+        let resumeTarget = null
+
+        // 判断是否可以续录到上次未达分片时长的文件
+        const resumable = await this.findResumableFile(recordId, record.settings, outFilePath)
+        if (resumable) {
+          resumeTarget = resumable.path
+          // 续录模式：本次先录到临时文件，结束后合并回目标文件
+          actualOutputPath = outFilePath + '.resuming'
+          outFilePath = resumeTarget // 历史记录指向最终的目标文件
+          this.resumeState[recordId] = {
+            targetPath: resumeTarget,
+            tempPath: actualOutputPath,
+            targetHistoryId: resumable.historyId
+          }
+          console.log(`续录模式: 临时=${actualOutputPath} 目标=${resumeTarget}`)
+        } else {
+          delete this.resumeState[recordId]
+        }
+
         // 插入录制历史记录
         const recordHistory = {
           recordId: recordId,
           file: {
-            name: fileName,
+            name: path.basename(outFilePath),
             format: record.settings.fileFormat,
             absolutePath: outFilePath
           },
@@ -346,8 +368,14 @@ const recordManager = new Vue({
           Platform.setFFmpegOutputOptions(command, videoOutPutFormatOptions)
         }
         const recordStartTime = Date.now()
-        command.output(outFilePath)
+        command.output(actualOutputPath)
           .on('error', async (e) => {
+            // 续录模式下录制失败：删除临时文件，目标文件保持原样
+            const rState = this.resumeState[recordId]
+            if (rState) {
+              try { if (fs.existsSync(rState.tempPath)) fs.unlinkSync(rState.tempPath) } catch (e2) {}
+              delete this.resumeState[recordId]
+            }
             // 计算退避时间：短时间就中断视为网络异常，连续异常时逐步拉长重连间隔，
             // 避免"中断->立刻重录"风暴产生大量几秒的无效片段。
             const duration = Date.now() - recordStartTime
@@ -369,10 +397,29 @@ const recordManager = new Vue({
           .on('end', async () => {
             // 正常结束，清除该任务的异常中断退避计数
             delete this.reconnectBackoff[recordId]
+            // 续录模式：把临时文件合并回目标文件
+            const rState = this.resumeState[recordId]
+            let merged = false
+            if (rState) {
+              try {
+                merged = await this.mergeResumedFile(rState.targetPath, rState.tempPath)
+                if (merged) {
+                  // 合并成功：更新目标历史记录的结束时间（时长=总时长），删除本次重复记录
+                  await this.$dbs.recordHistory._update_({_id: rState.targetHistoryId}, {$set: {stopRecordTime: new Date()}}, {})
+                  await this.$dbs.recordHistory._remove_({_id: recordHistoryDoc._id}, {})
+                  console.log(`续录合并完成: ${rState.targetPath}`)
+                }
+              } catch (e) {
+                console.log('续录合并异常:', e)
+              }
+              delete this.resumeState[recordId]
+            }
             // 录制结束，重置record状态，recordHistory标记成功
             await this.$dbs.record._update_({_id: recordId}, {$set: {status: this.recordStatus.waitToCheck, lastCheckTime: new Date(), 'user.roomId': (result.roomId ? result.roomId : record.user.roomId)}}, {})
               .then(async _ => {
-                await this.$dbs.recordHistory._update_({_id: recordHistoryDoc._id}, {$set: {status: this.recordHistoryStatus.success, stopRecordTime: new Date()}}, {})
+                if (!merged) {
+                  await this.$dbs.recordHistory._update_({_id: recordHistoryDoc._id}, {$set: {status: this.recordHistoryStatus.success, stopRecordTime: new Date()}}, {})
+                }
                 this.handlerListener().end(options, record)
                 this.removeStopCallback(recordId)
               })
@@ -435,6 +482,98 @@ const recordManager = new Vue({
         await sleep(this.checkScanWindow)
       }
     },
+    /**
+     * 查找可续录的上次录制文件。
+     * 条件：同一录制任务、状态成功、文件存在、格式支持concat、
+     *       上次时长未达分片时长、两次开始时间间隔在配置阈值内。
+     * @return {Promise<string|null>} 可续接的文件绝对路径
+     */
+    async findResumableFile (recordId, settings, outFilePath) {
+      try {
+        // 仅 FLV/MP4/MKV/TS 支持 ffmpeg concat -c copy
+        const ext = path.extname(outFilePath).toLowerCase()
+        if (!['.flv', '.mp4', '.mkv', '.ts'].includes(ext)) return null
+        const gapMinutes = Number(this.globalSettings.resumeGapMinutes)
+        const maxGapMs = (Number.isFinite(gapMinutes) && gapMinutes > 0 ? gapMinutes : 10) * 60 * 1000
+        const fragmentSeconds = Number(settings.fragmentLength) || 1800
+        const now = Date.now()
+
+        const histories = await this.$dbs.recordHistory._find_({recordId, status: this.recordHistoryStatus.success})
+        if (!histories || histories.length === 0) return null
+        // 取开始时间最近的一条
+        const sorted = histories.slice().sort((a, b) => {
+          const ta = a.startRecordTime ? new Date(a.startRecordTime).getTime() : 0
+          const tb = b.startRecordTime ? new Date(b.startRecordTime).getTime() : 0
+          return tb - ta
+        })
+        const last = sorted[0]
+        const startMs = last.startRecordTime ? new Date(last.startRecordTime).getTime() : 0
+        if (!startMs || (now - startMs) > maxGapMs) return null
+        const absPath = last.file && last.file.absolutePath
+        if (!absPath || !fs.existsSync(absPath) || absPath === outFilePath) return null
+
+        // 用 ffprobe 读上次文件时长（通过 fluent-ffmpeg 的 ffprobe 不可用，这里用文件大小粗略估算不可靠）
+        // 改用历史记录里记录的 times：stopRecordTime - startRecordTime
+        const stopMs = last.stopRecordTime ? new Date(last.stopRecordTime).getTime() : 0
+        const durationSec = stopMs && startMs ? (stopMs - startMs) / 1000 : 0
+        if (durationSec <= 0 || durationSec >= fragmentSeconds) return null
+        // 文件需非空
+        if (fs.statSync(absPath).size < 1024) return null
+        return {path: absPath, historyId: last._id}
+      } catch (e) {
+        console.log('查找续录文件出错:', e)
+        return null
+      }
+    },
+
+    /**
+     * 把本次录制的临时文件用 ffmpeg concat -c copy 合并到目标文件，成功后删除临时文件。
+     */
+    mergeResumedFile (targetPath, tempPath) {
+      return new Promise((resolve, reject) => {
+        if (!fs.existsSync(tempPath) || fs.statSync(tempPath).size < 1024) {
+          // 临时文件无效，直接删掉，不动原文件
+          try { fs.unlinkSync(tempPath) } catch (e) {}
+          resolve(false)
+          return
+        }
+        const listPath = tempPath + '.concat.txt'
+        // concat 清单里的路径用正斜杠并转义单引号
+        const safe = p => p.replace(/\\/g, '/').replace(/'/g, "'\\''")
+        fs.writeFileSync(listPath, `file '${safe(targetPath)}'\nfile '${safe(tempPath)}'\n`)
+        const mergedPath = tempPath + '.merged'
+        ffmpeg()
+          .input(listPath)
+          .inputOptions('-f', 'concat', '-safe', '0')
+          .outputOptions('-c', 'copy')
+          .output(mergedPath)
+          .on('end', () => {
+            try {
+              if (fs.existsSync(mergedPath) && fs.statSync(mergedPath).size > 0) {
+                fs.copyFileSync(mergedPath, targetPath)
+              }
+              fs.unlinkSync(tempPath)
+              if (fs.existsSync(mergedPath)) fs.unlinkSync(mergedPath)
+              if (fs.existsSync(listPath)) fs.unlinkSync(listPath)
+              resolve(true)
+            } catch (e) {
+              reject(e)
+            }
+          })
+          .on('error', e => {
+            // 合并失败：清理临时文件，保留原文件
+            try {
+              if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
+              if (fs.existsSync(mergedPath)) fs.unlinkSync(mergedPath)
+              if (fs.existsSync(listPath)) fs.unlinkSync(listPath)
+            } catch (e2) {}
+            console.log('续录合并失败:', e.message)
+            resolve(false)
+          })
+          .run()
+      })
+    },
+
     /**
      * 计算录制异常中断后的重连退避时间（毫秒）。
      * 短时中断视为网络异常，连续异常时指数退避；录制较久后中断则视为偶发，重置计数。
