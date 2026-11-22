@@ -12,9 +12,8 @@
         <label slot="label">
           输出文件夹(默认)
         </label>
-        <input ref="folderSelect" type="file" @change="fileChange" webkitdirectory hidden></input>
         <el-input readonly v-model="globalSettings.defaultOuPutDir"></el-input>
-        <el-button type="primary" size="small" @click="$refs.folderSelect.click()">选取</el-button>
+        <el-button type="primary" size="small" @click="chooseDefaultDir">选取</el-button>
         <el-tooltip v-if="!isDefaultOuPutDirApplyToAllRecords" effect="light" content="新增录制时生效" placement="right">
           <em class="el-icon-warning important-help"></em>
         </el-tooltip>
@@ -60,6 +59,7 @@
 import CommonPage from '../../CommonPage'
 import {getSettings, saveSettings} from '../../../config/settings'
 import LivePlatform from '../../../live-platform/live-platform'
+import {remote} from 'electron'
 export default {
   name: 'Index',
   components: {CommonPage},
@@ -140,12 +140,15 @@ export default {
     }
   },
   methods: {
-    fileChange (event) {
-      if (!event.target.files.length > 0 || !event.target.files[0]) {
-        return
+    chooseDefaultDir () {
+      const result = remote.dialog.showOpenDialogSync({
+        title: '选择默认输出文件夹',
+        properties: ['openDirectory', 'createDirectory']
+      })
+      if (result && result.length > 0) {
+        console.log('选择默认输出文件夹:', result[0])
+        this.globalSettings.defaultOuPutDir = result[0]
       }
-      console.log(event.target.files[0].path)
-      this.globalSettings.defaultOuPutDir = event.target.files[0].path
     },
     save (onSuccess) {
       const settings = {...this.globalSettings}

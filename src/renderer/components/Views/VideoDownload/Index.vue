@@ -40,9 +40,8 @@
           </el-form-item>
           <el-form-item>
             <label slot="label">下载文件夹：</label>
-            <input ref="folderSelect" type="file" @change="fileChange" webkitdirectory hidden></input>
             <el-input readonly v-model="preDownloadDialogData.downloadFolder" style="width: 60%"></el-input>
-            <el-button type="primary" size="small" @click="() => {/*先清除上次选择的目录*/$refs.folderSelect.value = null;$refs.folderSelect.click()}">选取</el-button>
+            <el-button type="primary" size="small" @click="chooseDownloadDir">选取</el-button>
           </el-form-item>
         </el-form>
         <div slot="footer">
@@ -65,6 +64,7 @@ import CommonPage from '../../CommonPage'
 import ImageList from '../../ImageList'
 // import BiliBiliVideoDownloadAdapter from '../../../video-download-adapter/BiliBiliVideoDownloadAdapter'
 import DownloadAdapter from '../../../video-download-adapter'
+import {remote} from 'electron'
 
 export default {
   name: 'VideoDownload',
@@ -156,12 +156,15 @@ export default {
       this.fileFormats = adapter.supportVideoOutPutFormats ? Object.keys(adapter.supportVideoOutPutFormats) : []
       this.reset()
     },
-    fileChange (event) {
-      if (!event.target.files.length > 0 || !event.target.files[0]) {
-        return
+    chooseDownloadDir () {
+      const result = remote.dialog.showOpenDialogSync({
+        title: '选择下载文件夹',
+        properties: ['openDirectory', 'createDirectory']
+      })
+      if (result && result.length > 0) {
+        console.log('选择下载文件夹:', result[0])
+        this.preDownloadDialogData.downloadFolder = result[0]
       }
-      console.log(event.target.files[0].path)
-      this.preDownloadDialogData.downloadFolder = event.target.files[0].path
     },
     reset () {
       this.selection = []
