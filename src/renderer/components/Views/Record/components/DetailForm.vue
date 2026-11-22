@@ -133,6 +133,11 @@
 import livePlatform from '../../../../live-platform/index'
 import {getSettings} from '../../../../config/settings'
 import {remote} from 'electron'
+
+// 保存任务的并发锁：防止快速多次点击保存时，find 去重检查出现竞态，
+// 导致同一主播被重复插入多条任务。
+const savingKeys = new Set()
+
 export default {
   name: 'DetailForm',
   props: {
@@ -460,22 +465,33 @@ export default {
         })
       } else {
         // 按平台 + 主播 ID 去重，避免不同平台同名主播被误判为重复
+        const saveKey = record.platform.code + '|' + record.user.id
+        if (savingKeys.has(saveKey)) {
+          // 同一主播正在保存中，忽略重复提交（快速多次点击保存）
+          this.$message.warning('正在保存中，请勿重复提交')
+          return
+        }
+        savingKeys.add(saveKey)
+        const release = () => savingKeys.delete(saveKey)
         const duplicateQuery = {
-          'platform.code': this.record.platform.platformInfo.code,
-          'user.id': this.user.id
+          'platform.code': record.platform.code,
+          'user.id': record.user.id
         }
         this.$dbs.record.find(duplicateQuery, (e, docs) => {
           if (e) {
             console.log(e)
+            release()
           }
           if (docs.length > 0) {
             this.$message.error('该主播的录制任务已存在')
+            release()
           } else {
-            this.$dbs.record.insert(record, (e, nDoc) => {
+            this.$dbs.record.insert(record, (insertErr, nDoc) => {
+              release()
               if (nDoc) {
                 this.$emit('save-success')
               }
-              console.log(nDoc)
+              if (insertErr) console.log(insertErr)
             })
           }
         })

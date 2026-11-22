@@ -102,6 +102,59 @@ const recordManager = new Vue({
         status: {$in: [this.recordStatus.checking, this.recordStatus.recording]}
       }, {$set: {status: this.recordStatus.waitToCheck}}, {multi: true})
       await this.$dbs.recordHistory._update_({status: this.recordHistoryStatus.recording}, {$set: {status: this.recordHistoryStatus.unexpectedExit, stopRecordTime: new Date()}}, {multi: true})
+      // 清理同一平台+同一主播的重复任务（历史遗留），只保留最早创建的一条
+      await this.dedupeRecords()
+    },
+    /**
+     * 自动去重：同平台 + 同主播(user.id) 只保留一个录制任务，删除其余。
+     * 重复任务会同时监控同一直播、互相冲突，产生大量短片段。
+     */
+    async dedupeRecords () {
+      try {
+        const all = await this.$dbs.record._find_({})
+        if (!all || all.length === 0) return
+        const groups = {}
+        for (const r of all) {
+          const code = r.platform && r.platform.code
+          const uid = r.user && (r.user.id != null ? r.user.id : r.user.name)
+          if (!code || !uid) continue
+          const key = code + '|' + uid
+          if (!groups[key]) groups[key] = []
+          groups[key].push(r)
+        }
+        // 配置签名：只删除配置完全相同的重复项，避免误删用户有意保留的不同配置
+        const signature = r => {
+          const s = r.settings || {}
+          const q = s.preferenceQuality || {}
+          const c = s.preferenceChannel || {}
+          return JSON.stringify([
+            s.autoCheck, s.checkWindow, s.fileFormat, s.autoFragment, s.fragmentLength,
+            q.code, c.code
+          ])
+        }
+        let removed = 0
+        for (const key of Object.keys(groups)) {
+          const list = groups[key]
+          if (list.length <= 1) continue
+          // 按创建时间升序，保留最早的一条
+          list.sort((a, b) => {
+            const ta = a.createTime ? new Date(a.createTime).getTime() : 0
+            const tb = b.createTime ? new Date(b.createTime).getTime() : 0
+            return ta - tb
+          })
+          const keptSig = signature(list[0])
+          for (let i = 1; i < list.length; i++) {
+            // 配置不同的保留（可能是用户有意的多配置）
+            if (signature(list[i]) !== keptSig) continue
+            if (this.stopCallbackMap[list[i]._id]) this.stopRecord(list[i]._id)
+            await this.$dbs.record._remove_({_id: list[i]._id}, {})
+            removed++
+          }
+        }
+        if (removed > 0) console.log(`[去重] 清理了 ${removed} 个配置完全相同的重复录制任务`)
+      } catch (e) {
+        console.log('去重失败:', e.message)
+      }
     },
     async fixUnexpectedRecordHistory () {
       try {
