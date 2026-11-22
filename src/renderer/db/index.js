@@ -4,6 +4,10 @@ import { remote } from 'electron'
 import fs from 'fs'
 import readline from 'readline'
 
+// 首次启动时 userData/db 目录可能不存在，NeDB 不会自动创建父目录
+const dbDirectory = path.join(remote.app.getPath('userData'), '/db')
+fs.mkdirSync(dbDirectory, {recursive: true})
+
 // 分页查询
 /**
  * @param query {Object}
@@ -175,6 +179,11 @@ export async function checkAndRebuild (dbs, onError, onStart, onFinished, onFina
   const rebuildList = []
   try {
     for (let db of Object.values(dbs)) {
+      // 文件不存在时直接加载，NeDB 会创建空库
+      if (!fs.existsSync(db.filename)) {
+        db.loadDatabase()
+        continue
+      }
       // 判断单个db文件是否超256MB
       if (fs.statSync(db.filename).size / (1024 * 1024) > 256) {
         // 放入重建列表

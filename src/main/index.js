@@ -130,7 +130,8 @@ function createWindow () {
     }
   })
   mainWindow.appTray = tray
-  // mainWindow.setMenu(null)
+  // 隐藏 Electron 默认的 File/Edit/View/Window/Help 菜单栏
+  mainWindow.setMenu(null)
   // 打开开发者工具（调试使用）
   // mainWindow.webContents.openDevTools()
   mainWindow.loadURL(winURL)
