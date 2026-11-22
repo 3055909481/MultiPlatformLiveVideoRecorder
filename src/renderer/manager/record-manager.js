@@ -308,8 +308,10 @@ const recordManager = new Vue({
         const resumable = await this.findResumableFile(recordId, record.settings, outFilePath)
         if (resumable) {
           resumeTarget = resumable.path
-          // 续录模式：本次先录到临时文件，结束后合并回目标文件
-          actualOutputPath = outFilePath + '.resuming'
+          // 续录模式：本次先录到临时文件，结束后合并回目标文件。
+          // 注意：临时文件必须保留原扩展名（如 xxx.resuming.flv），否则 ffmpeg 无法推断输出格式而报 EINVAL。
+          const ext = path.extname(outFilePath)
+          actualOutputPath = outFilePath.slice(0, -ext.length) + '.resuming' + ext
           outFilePath = resumeTarget // 历史记录指向最终的目标文件
           this.resumeState[recordId] = {
             targetPath: resumeTarget,
@@ -541,7 +543,9 @@ const recordManager = new Vue({
         // concat 清单里的路径用正斜杠并转义单引号
         const safe = p => p.replace(/\\/g, '/').replace(/'/g, "'\\''")
         fs.writeFileSync(listPath, `file '${safe(targetPath)}'\nfile '${safe(tempPath)}'\n`)
-        const mergedPath = tempPath + '.merged'
+        // 合并结果也必须保留原扩展名，否则 ffmpeg 无法推断 muxer 报 EINVAL
+        const ext = path.extname(tempPath)
+        const mergedPath = tempPath.slice(0, -ext.length) + '.merged' + ext
         ffmpeg()
           .input(listPath)
           .inputOptions('-f', 'concat', '-safe', '0')
