@@ -66,9 +66,11 @@ class StripchatLivePlatform extends LivePlatform {
 
     let status = 0
     let data = null
+    let pageTitle = ''
     try {
       const result = await this.browserFetch(pageUrl, apiUrl)
       status = result.status
+      pageTitle = result.pageTitle || ''
       try {
         data = JSON.parse(result.body)
       } catch (e) {
@@ -79,7 +81,10 @@ class StripchatLivePlatform extends LivePlatform {
     }
 
     if (status === 403 || status === 418) {
-      throw new Error(`Stripchat 拒绝了访问（HTTP ${status}），可能是地区限制，请检查网络环境`)
+      const challengeHint = /just a moment|attention required|checking|验证/i.test(pageTitle)
+        ? '（页面本身被验证页拦截）'
+        : '（页面正常但API被拦截）'
+      throw new Error(`Stripchat 拒绝访问 HTTP ${status}${challengeHint}${pageTitle ? '，页面标题：' + pageTitle : ''}`)
     }
     if (!data || !data.cam) {
       const msg = data && data.error ? data.error : `HTTP ${status}`

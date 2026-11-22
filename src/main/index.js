@@ -293,14 +293,16 @@ function createWindow () {
     }
   })
 
-  // 通用浏览器抓取：用隐藏窗口加载页面，在真实 Chromium 上下文里 fetch API，
+  // 通用浏览器抓取：用浏览器窗口加载页面，在真实 Chromium 上下文里 fetch API，
   // 用浏览器自身的 TLS 指纹与 Cookie 绕过 Cloudflare 对 Node.js 的拦截。
+  const REAL_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   IpcMainUtil.on(IpcChannel.browserFetch, async (event, token, pageUrl, apiUrl) => {
     let fetchWindow = null
     try {
       fetchWindow = new BrowserWindow({
         parent: mainWindow,
-        show: false,
+        // 可见窗口更容易通过 Cloudflare 的可见性检测，加载成功后立即关闭
+        show: true,
         width: 900,
         height: 600,
         webPreferences: {
@@ -311,19 +313,44 @@ function createWindow () {
           enableRemoteModule: false
         }
       })
+      // 去掉 Electron 标识，否则 Cloudflare 直接判定为机器人
+      fetchWindow.webContents.setUserAgent(REAL_UA)
+
       await fetchWindow.loadURL(pageUrl)
-      // 页面加载完成后（含 Cloudflare 挑战），在页面上下文里请求 API
-      await new Promise(resolve => setTimeout(resolve, 1500))
+
+      // 等待 Cloudflare 挑战完成：页面标题不再是"Just a moment"/验证码，且停留一段时间
+      let pageTitle = ''
+      for (let i = 0; i < 12; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        let title = ''
+        try {
+          title = await fetchWindow.webContents.executeJavaScript('document.title', true)
+        } catch (e) {
+          continue
+        }
+        pageTitle = title || ''
+        if (!/just a moment|attention required|checking your browser|验证|checking/i.test(pageTitle)) {
+          // 标题正常，再稳一会儿让 Cookie 种下
+          await new Promise(resolve => setTimeout(resolve, 1500))
+          break
+        }
+      }
+
+      // 在页面上下文里请求 API：同源 + 浏览器 TLS 指纹 + 浏览器自动携带 Cookie
       const script = `(async () => {
         const resp = await fetch(${JSON.stringify(apiUrl)}, {
-          headers: {'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json'},
+          headers: {'Accept': 'application/json, text/plain, */*', 'Referer': ${JSON.stringify(pageUrl)}},
           credentials: 'include'
         });
         const text = await resp.text();
         return JSON.stringify({status: resp.status, body: text});
       })()`
       const result = await fetchWindow.webContents.executeJavaScript(script, true)
-      IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.browserFetchReply, token, true, result)
+      // 附加页面标题用于诊断：标题是挑战页说明连页面都被拦，是正常标题则是API请求特征问题
+      let resultObj = {}
+      try { resultObj = JSON.parse(result) } catch (e) { resultObj = {status: 0, body: result} }
+      resultObj.pageTitle = pageTitle
+      IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.browserFetchReply, token, true, JSON.stringify(resultObj))
     } catch (e) {
       IpcMainUtil.sendToRenderer(mainWindow, IpcChannel.browserFetchReply, token, false, e.message)
     } finally {
