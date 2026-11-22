@@ -27,6 +27,8 @@ const recordManager = new Vue({
       // queue: [],
       // recordQueueIndex: {},
       stopCallbackMap: {},
+      // 录制异常中断的退避信息：{recordId: {failures, lastFailTime}}
+      reconnectBackoff: {},
       // 设为false关闭自动扫描检查录制
       checkRunning: true,
       // 检查扫描窗口（ms）
@@ -337,8 +339,9 @@ const recordManager = new Vue({
         // 调用ffmpeg录制
         const command = ffmpeg()
         // 设置全局默认参数
-        // 设置IO超时时间，单位微妙((us), 20秒， 解决断网或者IO流结束后任然在录制不能断开的问题
-        command.outputOptions('-rw_timeout', 20000000)
+        // IO 超时时间，单位微秒。原 20 秒对直播流过于激进（HLS 分片间隔+网络抖动
+        // 很容易 20 秒无数据而误判中断），增大到 60 秒以减少网络波动导致的误杀。
+        command.outputOptions('-rw_timeout', 60000000)
         // 根据不同平台设置不同输出操作
         Platform.setFFmpegOutputOptions(command, result.ffmpegCommandOutputOption)
         // 输出格式设置
@@ -351,10 +354,18 @@ const recordManager = new Vue({
           // 追加视频输出格式参数FFmpegOutputOptions
           Platform.setFFmpegOutputOptions(command, videoOutPutFormatOptions)
         }
+        const recordStartTime = Date.now()
         command.output(outFilePath)
           .on('error', async (e) => {
-            // 录制出错，重置record, recordHistory标记为失败
-            await this.$dbs.record._update_({_id: recordId}, {$set: {status: this.recordStatus.waitToCheck}}, {})
+            // 计算退避时间：短时间就中断视为网络异常，连续异常时逐步拉长重连间隔，
+            // 避免"中断->立刻重录"风暴产生大量几秒的无效片段。
+            const duration = Date.now() - recordStartTime
+            const backoff = this.computeReconnectBackoff(recordId, duration)
+            console.log({m: 'ffmpeg error!!!', e, durationMs: duration, backoffMs: backoff})
+
+            // 重置状态时把 lastCheckTime 推迟，扫描循环在退避期内不会重录
+            const retryAt = new Date(Date.now() + backoff - (Number(record.settings.checkWindow) || 10) * 1000)
+            await this.$dbs.record._update_({_id: recordId}, {$set: {status: this.recordStatus.waitToCheck, lastCheckTime: retryAt}}, {})
               .then(async _ => {
                 await this.$dbs.recordHistory._update_({_id: recordHistoryDoc._id}, {$set: {status: this.recordHistoryStatus.failed, stopRecordTime: new Date(), errorMessage: e.message}}, {})
                 this.handlerListener().error(options, record, e)
@@ -363,9 +374,10 @@ const recordManager = new Vue({
                 this.handlerListener().error(options, record, e1)
                 this.removeStopCallback(recordId)
               })
-            console.log({m: 'ffmpeg error!!!', e})
           })
           .on('end', async () => {
+            // 正常结束，清除该任务的异常中断退避计数
+            delete this.reconnectBackoff[recordId]
             // 录制结束，重置record状态，recordHistory标记成功
             await this.$dbs.record._update_({_id: recordId}, {$set: {status: this.recordStatus.waitToCheck, lastCheckTime: new Date(), 'user.roomId': (result.roomId ? result.roomId : record.user.roomId)}}, {})
               .then(async _ => {
@@ -431,6 +443,28 @@ const recordManager = new Vue({
         }
         await sleep(this.checkScanWindow)
       }
+    },
+    /**
+     * 计算录制异常中断后的重连退避时间（毫秒）。
+     * 短时中断视为网络异常，连续异常时指数退避；录制较久后中断则视为偶发，重置计数。
+     */
+    computeReconnectBackoff (recordId, durationMs) {
+      const MIN_DURATION = 2 * 60 * 1000 // 低于 2 分钟视为异常中断
+      const BASE = 30 * 1000 // 基础退避 30 秒
+      const MAX = 5 * 60 * 1000 // 最大退避 5 分钟
+      let info = this.reconnectBackoff[recordId] || {failures: 0, lastFailTime: 0}
+      // 距上次失败超过 10 分钟，认为已经恢复，重置计数
+      if (Date.now() - info.lastFailTime > 10 * 60 * 1000) info.failures = 0
+      if (durationMs >= MIN_DURATION) {
+        // 录制了较久才断，属于偶发网络波动，重置计数，短暂退避
+        info.failures = 0
+      } else {
+        info.failures += 1
+      }
+      info.lastFailTime = Date.now()
+      this.reconnectBackoff[recordId] = info
+      const backoff = info.failures === 0 ? BASE : Math.min(BASE * info.failures, MAX)
+      return backoff
     },
     isRecording (recordId) {
       return new Promise(async resolve => {
