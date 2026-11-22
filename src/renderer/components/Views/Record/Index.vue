@@ -58,7 +58,7 @@
         <el-table-column
             label="状态">
           <template scope="scope">
-            <el-button v-if="globalSettings.enableAutoCheck && scope.row.settings.autoCheck && (scope.row.status === 0)" icon="el-icon-loading" size="mini">等待中..</el-button>
+            <el-button v-if="scope.row.settings.autoCheck && (scope.row.status === 0)" icon="el-icon-loading" size="mini">等待中..</el-button>
             <el-button v-else-if="scope.row.status === -1" type="primary" icon="el-icon-loading" size="mini">检查中..</el-button>
             <el-button v-else-if="scope.row.status === 0" size="mini" disabled>未检查</el-button>
             <el-button v-else type="success" size="mini" icon="el-icon-loading">录制中..</el-button>

@@ -35,12 +35,7 @@ const recordManager = new Vue({
       checkScanWindow: 1000,
       // 全局设置
       globalSettings: {
-        enableAutoCheck: true,
         defaultOuPutDir: null
-        // // 默认检查窗口
-        // defaultCheckWindow: 10,
-        // // 检查扫描窗口（ms）
-        // checkScanWindow: 1000
       },
       statusChangeListener: null
     }
@@ -65,11 +60,7 @@ const recordManager = new Vue({
         this.globalSettings = gSettings
       }
       while (this.checkRunning) {
-        if (!this.globalSettings.enableAutoCheck) {
-          // 全局禁用检查时不进行扫描
-          await sleep(this.checkScanWindow)
-          continue
-        }
+        // 自动检查由每个录制任务自己的 settings.autoCheck 控制，不再有全局开关
         try {
           log.info('正在检查...')
           console.log(this.stopCallbackMap)

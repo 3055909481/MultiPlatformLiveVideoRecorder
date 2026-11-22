@@ -4,24 +4,6 @@
     <el-form slot="main" size="small" label-width="150px" label-position="left">
       <el-form-item>
         <label slot="label">
-          自动检查(全局)
-        </label>
-        <el-switch v-model="globalSettings.enableAutoCheck"></el-switch>
-      </el-form-item>
-      <el-form-item>
-        <label slot="label">
-          输出文件夹(默认)
-        </label>
-        <el-input readonly v-model="globalSettings.defaultOuPutDir"></el-input>
-        <el-button type="primary" size="small" @click="chooseDefaultDir">选取</el-button>
-        <el-tooltip v-if="!isDefaultOuPutDirApplyToAllRecords" effect="light" content="新增录制时生效" placement="right">
-          <em class="el-icon-warning important-help"></em>
-        </el-tooltip>
-        <br/>
-        <el-checkbox v-model="isDefaultOuPutDirApplyToAllRecords">输出文件夹应用到当前所有录制任务</el-checkbox>
-      </el-form-item>
-      <el-form-item>
-        <label slot="label">
           录制历史删除
         </label>
         <el-select v-model="globalSettings.deleteFileWhenDeleteHistory">
@@ -39,27 +21,59 @@
           <em class="el-icon-warning important-help"></em>
         </el-tooltip>
       </el-form-item>
-      <el-form-item
-          prop="fileFormat">
+
+      <el-form-item label-width="0">
+        <div class="settings-section-title">新增录制任务的默认配置</div>
+      </el-form-item>
+      <el-form-item>
         <label slot="label">
-          录制视频输出格式
+          默认输出文件夹
+        </label>
+        <el-input readonly v-model="globalSettings.defaultOuPutDir"></el-input>
+        <el-button type="primary" size="small" @click="chooseDefaultDir">选取</el-button>
+        <el-tooltip effect="light" content="新增录制时生效" placement="right">
+          <em class="el-icon-warning important-help"></em>
+        </el-tooltip>
+        <br/>
+        <el-checkbox v-model="isDefaultOuPutDirApplyToAllRecords">应用到当前所有录制任务</el-checkbox>
+      </el-form-item>
+      <el-form-item>
+        <label slot="label">
+          默认输出格式
         </label>
         <el-select v-model="globalSettings.defaultRecordVideoOutputFormat">
           <el-option v-for="format in recordVideoOutputFormats" :key="format" :value="format" :label="format.toUpperCase()"/>
         </el-select>
       </el-form-item>
-
-      <el-form-item label-width="0">
-        <div class="settings-section-title">新增录制任务的默认参数</div>
+      <el-form-item>
+        <label slot="label">
+          默认清晰度
+        </label>
+        <el-select v-model="globalSettings.defaultQualityPreference">
+          <el-option label="最高画质" value="highest"/>
+          <el-option label="最低画质" value="lowest"/>
+        </el-select>
+        <el-tooltip effect="light" content="新增录制时自动选择该平台对应最高/最低画质的选项" placement="right">
+          <em class="el-icon-warning important-help"></em>
+        </el-tooltip>
+      </el-form-item>
+      <el-form-item>
+        <label slot="label">
+          默认线路
+        </label>
+        <el-select v-model="globalSettings.defaultChannelPreference">
+          <el-option label="第一个线路(默认)" value="first"/>
+          <el-option label="最后一个线路" value="last"/>
+        </el-select>
+        <el-tooltip effect="light" content="新增录制时自动选择该平台对应顺序的线路" placement="right">
+          <em class="el-icon-warning important-help"></em>
+        </el-tooltip>
       </el-form-item>
       <el-form-item>
         <label slot="label">
           默认自动检查
         </label>
         <el-switch v-model="globalSettings.defaultAutoCheck"></el-switch>
-        <el-tooltip effect="light" content="新增录制任务默认是否自动检测主播开播" placement="right">
-          <em class="el-icon-warning important-help"></em>
-        </el-tooltip>
       </el-form-item>
       <el-form-item>
         <label slot="label">
@@ -68,18 +82,12 @@
         <el-select v-model="globalSettings.defaultCheckWindow" :disabled="!globalSettings.defaultAutoCheck">
           <el-option v-for="w in checkWindowOptions" :key="w.value" :label="w.label" :value="w.value"/>
         </el-select>
-        <el-tooltip effect="light" content="自动检查时每隔多久检测一次主播是否开播（秒）" placement="right">
-          <em class="el-icon-warning important-help"></em>
-        </el-tooltip>
       </el-form-item>
       <el-form-item>
         <label slot="label">
           默认自动分片
         </label>
         <el-switch v-model="globalSettings.defaultAutoFragment"></el-switch>
-        <el-tooltip effect="light" content="新增录制任务默认是否自动按时间段分片" placement="right">
-          <em class="el-icon-warning important-help"></em>
-        </el-tooltip>
       </el-form-item>
       <el-form-item>
         <label slot="label">
@@ -107,8 +115,6 @@ export default {
   data () {
     return {
       globalSettings: {
-        // 开启全局自动检查，false时录制任务自动检查不生效
-        enableAutoCheck: true,
         // 默认输出文件路径，新增时生效
         defaultOuPutDir: null,
         // 删除录制历史时同时删除文件, null 为禁用全局设置
@@ -118,7 +124,11 @@ export default {
         // 录制视频文件输出默认格式（仅新增录播生效）
         defaultRecordVideoOutputFormat: null,
         // 新增录制任务默认参数
-        // 默认是否自动检查（null 时沿用旧行为 false）
+        // 默认清晰度偏好：highest=最高画质, lowest=最低画质
+        defaultQualityPreference: 'highest',
+        // 默认线路偏好：first=第一个, last=最后一个
+        defaultChannelPreference: 'first',
+        // 默认是否自动检查
         defaultAutoCheck: false,
         // 默认检查间隔（秒）
         defaultCheckWindow: 10,

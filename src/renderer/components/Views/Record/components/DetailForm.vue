@@ -166,6 +166,11 @@ export default {
         if (gs.defaultCheckWindow !== undefined && gs.defaultCheckWindow !== null) this.record.checkWindow = gs.defaultCheckWindow
         if (typeof gs.defaultAutoFragment === 'boolean') this.record.autoFragment = gs.defaultAutoFragment
         if (gs.defaultFragmentLength !== undefined && gs.defaultFragmentLength !== null) this.record.fragmentLength = gs.defaultFragmentLength
+        // watch platform 先于设置加载触发，这里按偏好重新选择清晰度/线路
+        if (this.record.platform) {
+          this.record.quality = this.pickByPreference(this.record.platform, 'qualities', gs.defaultQualityPreference || 'highest')
+          this.record.channel = this.pickByPreference(this.record.platform, 'channels', gs.defaultChannelPreference || 'first')
+        }
       }
       console.log({settings: this.globalSettings})
     }).catch(e => {
@@ -254,8 +259,15 @@ export default {
   watch: {
     'record.platform': {
       handler (val) {
-        this.record.channel = val.getChannelByCode(val)
-        this.record.quality = val.getQualityByCode(val)
+        // 按全局偏好选择清晰度/线路（仅新增任务；编辑模式用数据库值）
+        if (!this.edit) {
+          this.record.channel = this.pickByPreference(
+            val, 'channels', this.globalSettings.defaultChannelPreference || 'first'
+          )
+          this.record.quality = this.pickByPreference(
+            val, 'qualities', this.globalSettings.defaultQualityPreference || 'highest'
+          )
+        }
         this.record.website = val.platformInfo.website
         this.record.outPutDir = this.$manager.recordManager.globalSettings.defaultOuPutDir
         // 如果全局设置设置了默认录制视频输出格式则使用设置，否则取第一个默认值
@@ -328,6 +340,17 @@ export default {
     }
   },
   methods: {
+    /**
+     * 按全局偏好从平台的清晰度/线路列表里选一个选项。
+     * preferHigh=true 选 orderIndex 最大（最高画质/默认线路），否则选最小。
+     */
+    pickByPreference (platform, listKey, preference) {
+      const list = platform && platform.defaultConfig ? platform.defaultConfig[listKey] : null
+      if (!list || list.length === 0) return null
+      const sorted = [...list].sort((a, b) => (Number(b.orderIndex) || 0) - (Number(a.orderIndex) || 0))
+      const preferHigh = preference === 'highest' || preference === 'first'
+      return preferHigh ? sorted[0] : sorted[sorted.length - 1]
+    },
     chooseOutputDir () {
       const result = remote.dialog.showOpenDialogSync({
         title: '选择输出文件夹',
