@@ -11,6 +11,7 @@ import axios from 'axios'
 import IpcMainUtil from '../helper/ipcMainUtil'
 import IpcChannel from '../helper/IpcChannel'
 import {registerUpdateHandlers} from './updater'
+import {registerStripchatRoutes} from './stripchat-proxy'
 import {getAppName, getGatewayExchangeServerPort} from '../helper'
 import '../helper/safe-url'
 /**
@@ -552,6 +553,9 @@ function startGatewayExchangeServer () {
       })
     }
   })
+  // Stripchat Mouflon 解密代理
+  registerStripchatRoutes(expressServer)
+
   expressServer.listen(getGatewayExchangeServerPort(), '127.0.0.1')
 }
 

@@ -1,5 +1,11 @@
 import LivePlatform from './live-platform.js'
 import HttpUtil from '../utils/http-util.js'
+import {getGatewayExchangeServerPort} from '../../helper'
+
+// 本地 Mouflon 解密代理
+function toProxyUrl (target) {
+  return `http://127.0.0.1:${getGatewayExchangeServerPort()}/gateway/stripchat/m3u8?url=${encodeURIComponent(target)}`
+}
 
 function parseInput (idOrUrl) {
   if (!/^https?:\/\//i.test(idOrUrl)) {
@@ -76,14 +82,43 @@ class StripchatLivePlatform extends LivePlatform {
     return data
   }
 
-  buildStreamUrls (modelId) {
-    const urls = []
-    // 多个 CDN 顶级域名，逐个尝试
-    for (const tld of ['doppiocdn.com', 'doppiocdn.org', 'doppiocdn.net', 'doppiocdn.live']) {
-      urls.push(`https://edge-hls.${tld}/hls/${modelId}/master/${modelId}_auto.m3u8`)
-      urls.push(`https://edge-hls.${tld}/hls/${modelId}/master/${modelId}.m3u8`)
+  /**
+   * 获取可录制的流地址。
+   * Stripchat 的流有两层坑：
+   * 1) master 里的变体 URL 不拿 pkey 会 302 到固定广告流；
+   * 2) 带 pkey 后是 Mouflon 加密分片，需经本地代理解密。
+   */
+  async buildStreamUrls (modelId) {
+    const headers = {
+      'User-Agent': this.cdnUserAgent,
+      Referer: 'https://stripchat.com/'
     }
-    return urls
+    const tlds = ['doppiocdn.com', 'doppiocdn.org', 'doppiocdn.net', 'doppiocdn.live']
+    for (const tld of tlds) {
+      try {
+        const masterUrl = `https://edge-hls.${tld}/hls/${modelId}/master/${modelId}_auto.m3u8`
+        const masterRes = await HttpUtil.get(masterUrl, headers)
+        if (masterRes.status !== 200 || typeof masterRes.data !== 'string') continue
+        const master = masterRes.data
+
+        // 从 master 里提取 pkey 和第一个变体 URL
+        const pkeyMatch = /#EXT-X-MOUFLON:PSCH:v2:([A-Za-z0-9]+)/.exec(master)
+        const variantMatch = /https?:\/\/[^\s]+\.m3u8[^\s]*/.exec(master)
+        if (!variantMatch) continue
+
+        let variantUrl = variantMatch[0].replace(/&amp;/g, '&')
+        if (pkeyMatch) {
+          const sep = variantUrl.includes('?') ? '&' : '?'
+          variantUrl += `${sep}psch=v2&pkey=${pkeyMatch[1]}`
+        }
+
+        // 交给本地代理解密分片后输出
+        return [toProxyUrl(variantUrl)]
+      } catch (e) {
+        // 换下一个 TLD
+      }
+    }
+    return []
   }
 
   async getUserInfo (idOrUrl) {
@@ -120,8 +155,10 @@ class StripchatLivePlatform extends LivePlatform {
     if (!isLive || status !== 'public') return null
 
     const modelId = item.modelId || (cam && cam.streamName)
-    const urls = this.buildStreamUrls(modelId)
-    if (urls.length === 0) return null
+    const urls = await this.buildStreamUrls(modelId)
+    if (urls.length === 0) {
+      throw new Error('Stripchat 流地址获取失败（未能解析 Mouflon 加密参数）')
+    }
     const streamUrl = urls[0]
     return {
       streamUrl,
