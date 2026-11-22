@@ -44,7 +44,44 @@ class DouyinLivePlatform extends LivePlatform {
     return `https://www.douyin.com/user/${id}?previous_page=app_code_link`
   }
 
+  getLiveUrl (webRid) {
+    return `https://live.douyin.com/${webRid}?enter_from_merge=web_others_homepage&enter_method=web_live_btn&room_id=`
+  }
+
+  /**
+   * 通过隐藏窗口读取直播间数据（流地址 + 昵称），页面有验证码时会自动弹窗让用户通过
+   */
+  async readLiveRoom (webRid) {
+    const streamDataStr = await getRoomDataFromWindow(this.getLiveUrl(webRid))
+    const data = JSON.parse(streamDataStr) || {}
+    // 兼容新旧两种返回结构
+    return {
+      streamMap: data.streams || data,
+      nickname: data.nickname || ''
+    }
+  }
+
   async getUserInfo (idOrUrl) {
+    // 直播间链接：https://live.douyin.com/{webRid}
+    const liveMatch = /https?:\/\/live\.douyin\.com\/(\d+)/.exec(idOrUrl)
+    if (liveMatch) {
+      const webRid = liveMatch[1]
+      let nickname = ''
+      try {
+        const data = await this.readLiveRoom(webRid)
+        nickname = data.nickname || ''
+      } catch (e) {
+        // 验证码未通过时先用 webRid 作为昵称占位，录制检查时再获取
+      }
+      return {
+        id: webRid,
+        idShow: webRid,
+        name: nickname || webRid,
+        webRid: webRid,
+        roomId: null
+      }
+    }
+
     let id = null
     try {
       id = new RegExp('(?:/user/|sec_uid=)([^/&?]*)(?:$|\\?|&)', 'g').exec(idOrUrl)[1]
@@ -63,25 +100,33 @@ class DouyinLivePlatform extends LivePlatform {
       id,
       idShow: info.douId || id,
       name: info.nickname || id,
+      webRid: info.webRid,
       roomId: info.roomId
     }
   }
 
   async check (user, preferenceQuality, preferenceChannel) {
-    const userRes = await HttpUtil.post(this.getUserUrl(user.id), null, this.httpHeaders)
-    const pageInfo = parseUserPage(userRes.data)
-    if (!pageInfo.webRid && !user.roomId) {
+    // 直播间链接保存的 webRid 优先；否则从用户主页解析
+    let webRid = user.webRid || null
+    let pageInfo = {title: '', roomId: null, webRid: null}
+    if (!webRid) {
+      const userRes = await HttpUtil.post(this.getUserUrl(user.id), null, this.httpHeaders)
+      pageInfo = parseUserPage(userRes.data)
+      webRid = pageInfo.webRid
+    }
+    if (!webRid && !user.roomId) {
       // 没有 web_rid 也没有历史 app 房间号，认为未开播
       return null
     }
 
     let streamMap = {}
+    let liveNickname = ''
     let appRoomId = pageInfo.roomId || user.roomId
-    if (pageInfo.webRid) {
-      const liveUrl = `https://live.douyin.com/${pageInfo.webRid}?enter_from_merge=web_others_homepage&enter_method=web_live_btn&room_id=`
+    if (webRid) {
       try {
-        const streamDataStr = await getRoomDataFromWindow(liveUrl)
-        streamMap = JSON.parse(streamDataStr) || {}
+        const data = await this.readLiveRoom(webRid)
+        streamMap = data.streamMap
+        liveNickname = data.nickname
       } catch (e) {
         streamMap = {}
       }
@@ -127,7 +172,7 @@ class DouyinLivePlatform extends LivePlatform {
         '-c': 'copy',
         '-flvflags': 'add_keyframe_index'
       },
-      title: pageInfo.title || user.name,
+      title: pageInfo.title || liveNickname || user.name,
       quality: realQuality,
       channel: preferenceChannel,
       roomId: appRoomId
@@ -136,11 +181,13 @@ class DouyinLivePlatform extends LivePlatform {
 }
 
 DouyinLivePlatform.getUserRoomOrHomeUrl = function (user) {
+  if (user.webRid) return `https://live.douyin.com/${user.webRid}`
   return 'https://www.douyin.com/user/' + user.id
 }
 
 DouyinLivePlatform.isSupportedUrl = function (url) {
-  return /https?:\/\/www\.douyin\.com\/user\/.*/.test(url)
+  return /https?:\/\/www\.douyin\.com\/user\/.*/.test(url) ||
+    /https?:\/\/live\.douyin\.com\/\d+/.test(url)
 }
 
 DouyinLivePlatform.platformInfo = {

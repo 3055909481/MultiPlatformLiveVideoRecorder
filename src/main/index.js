@@ -97,15 +97,29 @@ function evaluateDouyuSign (rid, code, did, t10) {
 function extractDouyinStreamsFromDom () {
   const html = document.documentElement.outerHTML || ''
   const re = /["\\]+(FULL_HD1|HD1|SD1|SD2)["\\]+\s*[:=]\s*["\\]+(https?:\/\/[^"\\]+)/g
-  const result = {}
+  const streams = {}
   let match
   while ((match = re.exec(html)) !== null) {
-    result[match[1]] = match[2]
+    streams[match[1]] = match[2]
       .replace(/\\\//g, '/')
       .replace(/\\u0026/g, '&')
       .replace(/&amp;/g, '&')
   }
-  return JSON.stringify(result)
+  // 直播间标题/主播昵称（页面里可能是 RSC 转义 JSON）
+  let nickname = ''
+  const nickPatterns = [
+    /\\?"nickname\\?"\s*:\s*\\?"([^"\\]{1,64})\\?"/,
+    /\\?"anchorName\\?"\s*:\s*\\?"([^"\\]{1,64})\\?"/,
+    /<title[^>]*>([^<]{1,64})<\/title>/
+  ]
+  for (const pattern of nickPatterns) {
+    const found = pattern.exec(html)
+    if (found) {
+      nickname = found[1].replace(/\\u0026/g, '&')
+      break
+    }
+  }
+  return JSON.stringify({streams: streams, nickname: nickname})
 }
 
 const douyinStreamScript = '(' + extractDouyinStreamsFromDom.toString() + ')()'
