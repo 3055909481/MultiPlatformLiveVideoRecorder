@@ -384,37 +384,58 @@ const recordManager = new Vue({
           this.resumeState[recordId] = {
             targetPath: resumeTarget,
             tempPath: actualOutputPath,
-            targetHistoryId: resumable.historyId
+            targetHistoryId: resumable.historyId,
+            prevStopTime: resumable.stopRecordTime || null
           }
           console.log(`续录模式: 临时=${actualOutputPath} 目标=${resumeTarget}`)
         } else {
           delete this.resumeState[recordId]
         }
 
-        // 插入录制历史记录
-        const recordHistory = {
-          recordId: recordId,
-          file: {
-            name: path.basename(outFilePath),
-            format: record.settings.fileFormat,
-            absolutePath: outFilePath
-          },
-          status: this.recordHistoryStatus.recording,
-          quality: result.quality,
-          channel: result.channel,
-          title: result.title,
-          startRecordTime: new Date(),
-          stopRecordTime: null,
-          errorMessage: null
-        }
-        // 插入一条录制记录
+        // 录制历史记录：
+        // - 续录模式：不插入新记录，复用上次那条记录（改回 recording 状态、清空结束时间）。
+        //   这样任何时刻历史里对同一个文件都只有一条记录，不会出现"很近的短片段"假象。
+        // - 普通模式：插入一条新记录。
+        let recordHistoryDoc = null
         let insertHistoryError = null
-        const recordHistoryDoc = await this.$dbs.recordHistory._insert_(recordHistory).catch(e => {
-          insertHistoryError = e
-        })
-        if (insertHistoryError) {
+        if (resumeTarget) {
+          // 复用旧记录：状态改回录制中，结束时间清空，更新本次的清晰度/线路
+          await this.$dbs.recordHistory._update_({_id: resumable.historyId}, {
+            $set: {
+              status: this.recordHistoryStatus.recording,
+              stopRecordTime: null,
+              errorMessage: null,
+              quality: result.quality,
+              channel: result.channel
+            }
+          }, {}).catch(e => { insertHistoryError = e })
+          recordHistoryDoc = await this.$dbs.recordHistory._find_({_id: resumable.historyId}).then(docs => docs[0]).catch(e => {
+            insertHistoryError = e
+            return null
+          })
+        } else {
+          const recordHistory = {
+            recordId: recordId,
+            file: {
+              name: path.basename(outFilePath),
+              format: record.settings.fileFormat,
+              absolutePath: outFilePath
+            },
+            status: this.recordHistoryStatus.recording,
+            quality: result.quality,
+            channel: result.channel,
+            title: result.title,
+            startRecordTime: new Date(),
+            stopRecordTime: null,
+            errorMessage: null
+          }
+          recordHistoryDoc = await this.$dbs.recordHistory._insert_(recordHistory).catch(e => {
+            insertHistoryError = e
+          })
+        }
+        if (insertHistoryError || !recordHistoryDoc) {
           // 出错
-          this.handlerListener().error(options, record, insertHistoryError)
+          this.handlerListener().error(options, record, insertHistoryError || new Error('录制历史记录操作失败'))
           return
         }
         // 上次自检时间，用于当任务进行中时不断调用回调onDoing
@@ -440,10 +461,20 @@ const recordManager = new Vue({
         const recordStartTime = Date.now()
         command.output(actualOutputPath)
           .on('error', async (e) => {
-            // 续录模式下录制失败：删除临时文件，目标文件保持原样
+            // 续录模式下录制失败：删除临时文件，目标文件保持原样；
+            // 复用的那条记录要恢复成 success + 原结束时间，否则下次找不到它续录。
             const rState = this.resumeState[recordId]
+            let resumeFailedRevert = false
             if (rState) {
               try { if (fs.existsSync(rState.tempPath)) fs.unlinkSync(rState.tempPath) } catch (e2) {}
+              await this.$dbs.recordHistory._update_({_id: recordHistoryDoc._id}, {
+                $set: {
+                  status: this.recordHistoryStatus.success,
+                  stopRecordTime: rState.prevStopTime || new Date(),
+                  errorMessage: null
+                }
+              }, {}).catch(() => {})
+              resumeFailedRevert = true
               delete this.resumeState[recordId]
             }
             // 计算退避时间：短时间就中断视为网络异常，连续异常时逐步拉长重连间隔，
@@ -456,7 +487,9 @@ const recordManager = new Vue({
             const retryAt = new Date(Date.now() + backoff - (Number(record.settings.checkWindow) || 10) * 1000)
             await this.$dbs.record._update_({_id: recordId}, {$set: {status: this.recordStatus.waitToCheck, lastCheckTime: retryAt}}, {})
               .then(async _ => {
-                await this.$dbs.recordHistory._update_({_id: recordHistoryDoc._id}, {$set: {status: this.recordHistoryStatus.failed, stopRecordTime: new Date(), errorMessage: e.message}}, {})
+                if (!resumeFailedRevert) {
+                  await this.$dbs.recordHistory._update_({_id: recordHistoryDoc._id}, {$set: {status: this.recordHistoryStatus.failed, stopRecordTime: new Date(), errorMessage: e.message}}, {})
+                }
                 this.handlerListener().error(options, record, e)
                 this.removeStopCallback(recordId)
               }).catch(e1 => {
@@ -475,19 +508,18 @@ const recordManager = new Vue({
                 const mergeResult = await this.mergeResumedFile(rState.targetPath, rState.tempPath)
                 merged = mergeResult.ok
                 if (merged) {
-                  // 合并成功：更新目标历史记录的结束时间（时长=总时长），删除本次重复记录
-                  await this.$dbs.recordHistory._update_({_id: rState.targetHistoryId}, {$set: {stopRecordTime: new Date()}}, {})
-                  await this.$dbs.recordHistory._remove_({_id: recordHistoryDoc._id}, {})
+                  // 合并成功：复用的是同一条记录，只需更新结束时间（时长=总时长）
+                  await this.$dbs.recordHistory._update_({_id: recordHistoryDoc._id}, {$set: {stopRecordTime: new Date()}}, {})
                   console.log(`续录合并完成: ${rState.targetPath}`)
                 } else if (mergeResult.standalonePath && fs.existsSync(mergeResult.standalonePath)) {
-                  // 合并失败但本次内容已另存：让本次历史记录指向真实文件，保证记录与实际一致
+                  // 合并失败但本次内容已另存：让这条记录指向真实文件，保证记录与实际一致
                   await this.$dbs.recordHistory._update_({_id: recordHistoryDoc._id}, {
                     $set: {
                       'file.absolutePath': mergeResult.standalonePath,
                       'file.name': path.basename(mergeResult.standalonePath)
                     }
                   }, {})
-                  console.log(`续录合并失败，本次记录改指向独立文件: ${mergeResult.standalonePath}`)
+                  console.log(`续录合并失败，记录改指向独立文件: ${mergeResult.standalonePath}`)
                 }
               } catch (e) {
                 console.log('续录合并异常:', e)
@@ -514,7 +546,7 @@ const recordManager = new Vue({
             // 每5秒调用一次
             if (lastSelfCheckTime === null || new Date().getTime() > lastSelfCheckTime + 5000) {
               lastSelfCheckTime = new Date().getTime()
-              this.handlerListener().doing(options, record, recordHistory)
+              this.handlerListener().doing(options, record, recordHistoryDoc)
             }
           })
         if (this.stopCallbackMap[record._id] !== undefined) {
@@ -531,7 +563,7 @@ const recordManager = new Vue({
             // 启动分片
             this.startAutoFragment(recordId)
           }
-          this.handlerListener().start(options, record, recordHistory)
+          this.handlerListener().start(options, record, recordHistoryDoc)
         }).catch(e => {
           this.handlerListener().error(options, record, e)
           this.removeStopCallback(recordId)
@@ -597,7 +629,7 @@ const recordManager = new Vue({
         if (durationSec <= 0 || durationSec >= fragmentSeconds) return null
         // 文件需非空
         if (fs.statSync(absPath).size < 1024) return null
-        return {path: absPath, historyId: last._id}
+        return {path: absPath, historyId: last._id, stopRecordTime: last.stopRecordTime}
       } catch (e) {
         console.log('查找续录文件出错:', e)
         return null
