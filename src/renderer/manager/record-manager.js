@@ -76,7 +76,19 @@ const recordManager = new Vue({
             await sleep(this.checkScanWindow)
             continue
           }
-          for (const record of records) {
+          // 运行时防护：同一平台+同一主播只让一个任务检查，避免重复任务互相冲突
+          // （即使启动时去重因故未清理干净，也能防止并发录制产生碎片）
+          const seenUser = {}
+          const deduped = []
+          for (const r of records) {
+            const code = r.platform && r.platform.code
+            const uid = r.user && (r.user.id != null ? r.user.id : r.user.name)
+            const key = code + '|' + uid
+            if (seenUser[key]) continue
+            seenUser[key] = true
+            deduped.push(r)
+          }
+          for (const record of deduped) {
             if (this.stopCallbackMap[record._id]) {
               // 正在录制，跳过
               continue
@@ -137,11 +149,14 @@ const recordManager = new Vue({
           const list = groups[key]
           if (list.length <= 1) continue
           // 按创建时间升序，保留最早的一条
-          list.sort((a, b) => {
-            const ta = a.createTime ? new Date(a.createTime).getTime() : 0
-            const tb = b.createTime ? new Date(b.createTime).getTime() : 0
-            return ta - tb
-          })
+          // 兼容 nedb 的日期格式 {"$$date": 时间戳}
+          const ts = v => {
+            if (!v) return 0
+            if (v && typeof v === 'object' && v.$$date) return new Date(v.$$date).getTime()
+            const n = new Date(v).getTime()
+            return Number.isFinite(n) ? n : 0
+          }
+          list.sort((a, b) => ts(a.createTime) - ts(b.createTime))
           const keptSig = signature(list[0])
           for (let i = 1; i < list.length; i++) {
             // 配置不同的保留（可能是用户有意的多配置）
@@ -555,21 +570,19 @@ const recordManager = new Vue({
 
         const histories = await this.$dbs.recordHistory._find_({recordId, status: this.recordHistoryStatus.success})
         if (!histories || histories.length === 0) return null
-        // 取开始时间最近的一条
-        const sorted = histories.slice().sort((a, b) => {
-          const ta = a.startRecordTime ? new Date(a.startRecordTime).getTime() : 0
-          const tb = b.startRecordTime ? new Date(b.startRecordTime).getTime() : 0
-          return tb - ta
-        })
+        // 取结束时间最近的一条（上次录完的文件）
+        const endOf = r => r.stopRecordTime ? new Date(r.stopRecordTime).getTime() : 0
+        const sorted = histories.slice().sort((a, b) => endOf(b) - endOf(a))
         const last = sorted[0]
         const startMs = last.startRecordTime ? new Date(last.startRecordTime).getTime() : 0
-        if (!startMs || (now - startMs) > maxGapMs) return null
+        const stopMs = endOf(last)
+        // 关键：间隔按上次的【结束时间】算，而不是开始时间。
+        // 否则一段录了很久的文件，即使刚停几秒就重开，也会因 start 太早被判定超时而不续录。
+        if (!stopMs || (now - stopMs) > maxGapMs) return null
         const absPath = last.file && last.file.absolutePath
         if (!absPath || !fs.existsSync(absPath) || absPath === outFilePath) return null
 
-        // 用 ffprobe 读上次文件时长（通过 fluent-ffmpeg 的 ffprobe 不可用，这里用文件大小粗略估算不可靠）
-        // 改用历史记录里记录的 times：stopRecordTime - startRecordTime
-        const stopMs = last.stopRecordTime ? new Date(last.stopRecordTime).getTime() : 0
+        // 上次文件时长 = stop - start；未达分片时长才续录
         const durationSec = stopMs && startMs ? (stopMs - startMs) / 1000 : 0
         if (durationSec <= 0 || durationSec >= fragmentSeconds) return null
         // 文件需非空
