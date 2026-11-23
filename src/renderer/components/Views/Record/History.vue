@@ -96,7 +96,7 @@
         <el-table-column
           label="时长">
           <template scope="scope">
-            <label>{{getTimeRange(scope.row.startRecordTime, scope.row.stopRecordTime)}}</label>
+            <label>{{getTimeRange(scope.row.startRecordTime, scope.row.stopRecordTime || (scope.row.status === 1 ? snapshotNow : null))}}</label>
           </template>
         </el-table-column>
         <el-table-column
@@ -162,7 +162,9 @@ export default {
       pageSize: 100,
       total: 0,
       // 加载条
-      tableDataLoading: true
+      tableDataLoading: true,
+      // 打开/刷新录制记录时的时间快照，用于计算正在录制条目的时长（不实时刷新）
+      snapshotNow: new Date()
     }
   },
   mounted () {
@@ -274,6 +276,8 @@ export default {
           } else {
             this.tableData = docs
             this.total = count
+            // 快照当前时间：正在录制的条目用它计算时长（仅加载时更新一次）
+            this.snapshotNow = new Date()
             this.tableDataLoading = false
             // 查询条件改变状态置为false
             this.queryConditionChange = false

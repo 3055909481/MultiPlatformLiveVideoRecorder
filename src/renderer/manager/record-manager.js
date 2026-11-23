@@ -472,12 +472,22 @@ const recordManager = new Vue({
             let merged = false
             if (rState) {
               try {
-                merged = await this.mergeResumedFile(rState.targetPath, rState.tempPath)
+                const mergeResult = await this.mergeResumedFile(rState.targetPath, rState.tempPath)
+                merged = mergeResult.ok
                 if (merged) {
                   // 合并成功：更新目标历史记录的结束时间（时长=总时长），删除本次重复记录
                   await this.$dbs.recordHistory._update_({_id: rState.targetHistoryId}, {$set: {stopRecordTime: new Date()}}, {})
                   await this.$dbs.recordHistory._remove_({_id: recordHistoryDoc._id}, {})
                   console.log(`续录合并完成: ${rState.targetPath}`)
+                } else if (mergeResult.standalonePath && fs.existsSync(mergeResult.standalonePath)) {
+                  // 合并失败但本次内容已另存：让本次历史记录指向真实文件，保证记录与实际一致
+                  await this.$dbs.recordHistory._update_({_id: recordHistoryDoc._id}, {
+                    $set: {
+                      'file.absolutePath': mergeResult.standalonePath,
+                      'file.name': path.basename(mergeResult.standalonePath)
+                    }
+                  }, {})
+                  console.log(`续录合并失败，本次记录改指向独立文件: ${mergeResult.standalonePath}`)
                 }
               } catch (e) {
                 console.log('续录合并异常:', e)
@@ -602,7 +612,7 @@ const recordManager = new Vue({
         if (!fs.existsSync(tempPath) || fs.statSync(tempPath).size < 1024) {
           // 临时文件无效，直接删掉，不动原文件
           try { fs.unlinkSync(tempPath) } catch (e) {}
-          resolve(false)
+          resolve({ok: false})
           return
         }
         const listPath = tempPath + '.concat.txt'
@@ -625,20 +635,30 @@ const recordManager = new Vue({
               fs.unlinkSync(tempPath)
               if (fs.existsSync(mergedPath)) fs.unlinkSync(mergedPath)
               if (fs.existsSync(listPath)) fs.unlinkSync(listPath)
-              resolve(true)
+              resolve({ok: true})
             } catch (e) {
               reject(e)
             }
           })
           .on('error', e => {
-            // 合并失败：清理临时文件，保留原文件
+            // 合并失败：不能丢掉本次录制内容。把临时文件改名成独立文件返回，
+            // 由调用方让本次历史记录指向它（安全降级为两段文件，而非丢失内容）。
+            try { if (fs.existsSync(mergedPath)) fs.unlinkSync(mergedPath) } catch (e2) {}
+            try { if (fs.existsSync(listPath)) fs.unlinkSync(listPath) } catch (e2) {}
+            let standalonePath = null
             try {
-              if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
-              if (fs.existsSync(mergedPath)) fs.unlinkSync(mergedPath)
-              if (fs.existsSync(listPath)) fs.unlinkSync(listPath)
-            } catch (e2) {}
-            console.log('续录合并失败:', e.message)
-            resolve(false)
+              const ext = path.extname(tempPath)
+              standalonePath = tempPath.slice(0, -ext.length - '.resuming'.length) + ext
+              // 若同名已存在，加时间戳避免覆盖
+              if (fs.existsSync(standalonePath)) {
+                standalonePath = tempPath.slice(0, -ext.length - '.resuming'.length) + '_' + Date.now() + ext
+              }
+              if (fs.existsSync(tempPath)) fs.renameSync(tempPath, standalonePath)
+            } catch (e2) {
+              standalonePath = null
+            }
+            console.log('续录合并失败，本次内容另存为独立文件:', standalonePath, e.message)
+            resolve({ok: false, standalonePath})
           })
           .run()
       })

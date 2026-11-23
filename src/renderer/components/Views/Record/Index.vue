@@ -61,7 +61,7 @@
             <el-button v-if="scope.row.settings.autoCheck && (scope.row.status === 0)" icon="el-icon-loading" size="mini">等待中..</el-button>
             <el-button v-else-if="scope.row.status === -1" type="primary" icon="el-icon-loading" size="mini">检查中..</el-button>
             <el-button v-else-if="scope.row.status === 0" size="mini" disabled>未检查</el-button>
-            <el-button v-else type="success" size="mini" icon="el-icon-loading">录制中..</el-button>
+            <el-button v-else type="success" size="mini" icon="el-icon-loading">录制中{{getElapsedText(scope.row)}}</el-button>
           </template>
         </el-table-column>
         <el-table-column
@@ -149,6 +149,13 @@ import {remote} from 'electron'
 export default {
   name: 'Index',
   components: {CommonPage},
+  created () {
+    // 每秒刷新一次，用于实时显示「已录制时长」
+    this._nowTimer = setInterval(() => { this.now = Date.now() }, 1000)
+  },
+  beforeDestroy () {
+    if (this._nowTimer) clearInterval(this._nowTimer)
+  },
   mounted () {
     console.log(this.$manager)
     const callback = this.getStatusChangeCallbackInstance()
@@ -186,7 +193,9 @@ export default {
       page: 1,
       pageSize: 11,
       total: 0,
-      globalSettings: {}
+      globalSettings: {},
+      // 当前时间戳（每秒更新，用于计算录制中的已录制时长）
+      now: Date.now()
     }
   },
   beforeRouteEnter (to, from, next) {
@@ -200,6 +209,21 @@ export default {
     next()
   },
   methods: {
+    /**
+     * 计算正在录制的任务已录制时长文本（依赖每秒更新的 this.now 触发重算）
+     */
+    getElapsedText (row) {
+      if (!row || row.status !== 1 || !row.recordingStartTime) return ''
+      const start = new Date(row.recordingStartTime).getTime()
+      if (!Number.isFinite(start)) return ''
+      let sec = Math.max(0, Math.floor((this.now - start) / 1000))
+      const h = Math.floor(sec / 3600)
+      sec -= h * 3600
+      const m = Math.floor(sec / 60)
+      sec -= m * 60
+      const pad = n => (n < 10 ? '0' + n : '' + n)
+      return h > 0 ? ` ${h}:${pad(m)}:${pad(sec)}` : ` ${pad(m)}:${pad(sec)}`
+    },
     /**
      * 改变table行数据，触发更新
      * @param record 新值
@@ -246,6 +270,7 @@ export default {
           recordUpdated.status = recordManager.recordStatus.recording
           recordUpdated.qualityName = recordHistory.quality.name
           recordUpdated.channelName = recordHistory.channel.name
+          recordUpdated.recordingStartTime = recordHistory.startRecordTime
         })
         // 发送通知开始录制（可在设置里关闭）
         if (this.globalSettings.enableStartNotice !== false) {
@@ -263,6 +288,7 @@ export default {
           recordUpdated.status = recordManager.recordStatus.waitToCheck
           recordUpdated.qualityName = ''
           recordUpdated.channelName = ''
+          recordUpdated.recordingStartTime = null
         })
         console.log('录制完成' + record._id)
       }).onError((options, record, e) => {
@@ -270,6 +296,7 @@ export default {
           recordUpdated.status = recordManager.recordStatus.waitToCheck
           recordUpdated.qualityName = ''
           recordUpdated.channelName = ''
+          recordUpdated.recordingStartTime = null
         })
         console.log({m: '录制出错', id: record._id, e})
         if (options.showMessage) {
@@ -422,7 +449,16 @@ export default {
           this.$message.error('获取录制任务列表失败:' + error.message)
           return
         }
-        this.$nextTick(_ => {
+        this.$nextTick(async _ => {
+          // 为正在录制的任务补上开始时间（该字段不入库，需从录制历史查询）
+          const recordingRows = docs.filter(d => d.status === 1)
+          if (recordingRows.length > 0) {
+            const allHistories = await this.$dbs.recordHistory._find_({status: 1}).catch(() => [])
+            for (const row of recordingRows) {
+              const hist = allHistories.find(h => h.recordId === row._id)
+              if (hist) row.recordingStartTime = hist.startRecordTime
+            }
+          }
           this.tableData = docs
           this.tableKey = (this.tableKey + 1) % 5
           this.total = count
