@@ -113,9 +113,51 @@ const recordManager = new Vue({
       await this.$dbs.record._update_({
         status: {$in: [this.recordStatus.checking, this.recordStatus.recording]}
       }, {$set: {status: this.recordStatus.waitToCheck}}, {multi: true})
-      await this.$dbs.recordHistory._update_({status: this.recordHistoryStatus.recording}, {$set: {status: this.recordHistoryStatus.unexpectedExit, stopRecordTime: new Date()}}, {multi: true})
+      // 修复上次意外退出时卡在「录制中」的历史记录：
+      // 文件完好(存在且非空)说明录制其实成功了，只是没走到 end 回调，
+      // 用文件最后修改时间作为结束时间恢复为成功；否则才标记为录制异常。
+      await this.fixStuckRecordings()
       // 清理同一平台+同一主播的重复任务（历史遗留），只保留最早创建的一条
       await this.dedupeRecords()
+    },
+    /**
+     * 修复意外退出遗留的「录制中」历史记录。
+     * 续录会复用同一条记录并临时清空结束时间，若此时软件退出，记录会永久卡在录制中。
+     * 文件实际已录好时不应误标为异常。
+     */
+    async fixStuckRecordings () {
+      try {
+        const stuck = await this.$dbs.recordHistory._find_({status: this.recordHistoryStatus.recording})
+        if (!stuck || stuck.length === 0) return
+        let recovered = 0
+        for (const h of stuck) {
+          const p = h.file && h.file.absolutePath
+          let ok = false
+          let mtime = null
+          try {
+            if (p && fs.existsSync(p) && fs.statSync(p).size > 1024) {
+              mtime = fs.statSync(p).mtime
+              ok = !!mtime
+            }
+          } catch (e) { ok = false }
+          if (ok) {
+            // 文件完好：恢复为成功，结束时间取文件最后写入时间
+            await this.$dbs.recordHistory._update_({_id: h._id}, {
+              $set: {status: this.recordHistoryStatus.success, stopRecordTime: mtime, errorMessage: null}
+            }, {})
+            recovered++
+          } else {
+            // 文件缺失/为空：才真的标记为异常
+            await this.$dbs.recordHistory._update_({_id: h._id}, {
+              $set: {status: this.recordHistoryStatus.unexpectedExit, stopRecordTime: new Date()}
+            }, {})
+          }
+        }
+        if (recovered > 0) console.log(`[修复] 恢复了 ${recovered} 条意外退出但文件完好的录制记录`)
+      } catch (e) {
+        // 兜底：出错时按老逻辑全部标记异常，避免卡死
+        await this.$dbs.recordHistory._update_({status: this.recordHistoryStatus.recording}, {$set: {status: this.recordHistoryStatus.unexpectedExit, stopRecordTime: new Date()}}, {multi: true})
+      }
     },
     /**
      * 自动去重：同平台 + 同主播(user.id) 只保留一个录制任务，删除其余。
